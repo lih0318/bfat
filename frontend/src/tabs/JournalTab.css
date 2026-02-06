@@ -132,3 +132,13 @@
 .journal-table td.negative {
   color: var(--negative);
 }
+
+@media (max-width: 768px) {
+  .journal-table th {
+    padding: 0.5rem 0.35rem;
+  }
+
+  .journal-table td {
+    padding: 0.5rem 0.35rem;
+  }
+}

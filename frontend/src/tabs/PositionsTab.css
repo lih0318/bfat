@@ -41,6 +41,7 @@
 
 .positions-table {
   width: 100%;
+  min-width: 700px;
   border-collapse: collapse;
   font-size: 0.9rem;
 }
@@ -104,4 +105,15 @@
   font-weight: 600;
   background: rgba(255, 255, 255, 0.03);
   padding: 0.75rem 1.25rem;
+}
+
+@media (max-width: 768px) {
+  .positions-table th,
+  .positions-table td {
+    padding: 0.6rem 0.75rem;
+  }
+
+  .positions-table tfoot .positions-total-row td {
+    padding: 0.6rem 0.75rem;
+  }
 }

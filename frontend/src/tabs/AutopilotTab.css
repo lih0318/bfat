@@ -170,6 +170,21 @@
   }
 }
 
+@media (max-width: 768px) {
+  .richman-status-card {
+    min-width: 0;
+  }
+
+  .richman-top {
+    grid-template-columns: 1fr;
+  }
+
+  .activity-item {
+    grid-template-columns: 1fr;
+    gap: 0.25rem;
+  }
+}
+
 .config-section label {
   display: flex;
   flex-direction: column;

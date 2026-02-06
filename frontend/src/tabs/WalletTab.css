@@ -101,3 +101,9 @@
   opacity: 0.6;
   cursor: not-allowed;
 }
+
+@media (max-width: 768px) {
+  .wallet-cards {
+    grid-template-columns: 1fr;
+  }
+}
