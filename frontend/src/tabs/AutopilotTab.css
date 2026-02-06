@@ -42,6 +42,65 @@
   box-shadow: var(--shadow);
 }
 
+.richman-regime-card {
+  flex: 1;
+  min-width: 200px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+  backdrop-filter: blur(8px);
+  box-shadow: var(--shadow);
+}
+
+.richman-regime-card h3 {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin: 0 0 0.875rem 0;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.regime-value {
+  margin: 0 0 0.35rem 0;
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.regime-value.regime--ranging {
+  color: #58a6ff;
+}
+
+.regime-value.regime--trending {
+  color: var(--accent);
+}
+
+.regime-adx {
+  font-weight: 500;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.regime-direction {
+  margin: 0 0 0.5rem 0;
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
+
+.regime-hint {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  opacity: 0.9;
+}
+
+.regime-unknown {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
+
 .richman-top {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
@@ -208,9 +267,21 @@
   transition: border-color 0.2s;
 }
 
-.config-section input:focus {
+.config-section input:focus,
+.config-section select:focus {
   border-color: rgba(212, 168, 83, 0.5);
   outline: none;
+}
+
+.config-section select {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  color: #e8eaed;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: border-color 0.2s;
 }
 
 .config-checkbox input[type="checkbox"] {

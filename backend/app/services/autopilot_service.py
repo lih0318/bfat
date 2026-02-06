@@ -16,6 +16,7 @@ from app.services.exchange_info import ExchangeInfoCache
 from app.services.journal_service import append_entry as journal_append, get_entries as journal_get_entries
 from app.strategies.base import MarketData, MarketDataCandle, SignalResult
 from app.strategies.confluence_atr import ConfluenceATRStrategy
+from app.strategies.range_rsi import RangeRSIStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -281,7 +282,10 @@ def run_one_cycle() -> None:
             return
         current_price = candles_by_tf[entry_tf][-1].close
         volumes = [c.volume for c in candles_by_tf[entry_tf][-21:-1]]
-        volume_ratio = (volumes[-1] / (sum(volumes) / len(volumes))) if len(volumes) >= 10 else 1.0
+        vol_sum = sum(volumes)
+        volume_ratio = (
+            (volumes[-1] / (vol_sum / len(volumes))) if len(volumes) >= 10 and vol_sum and vol_sum > 0 else 1.0
+        )
         funding_rate = 0.0
         try:
             fr = binance_client.funding_rate(symbol=symbol, limit=1)
@@ -296,15 +300,16 @@ def run_one_cycle() -> None:
             volume_ratio=volume_ratio,
             current_price=current_price,
         )
-        strategy = ConfluenceATRStrategy()
+        strategy = RangeRSIStrategy() if getattr(cfg, "strategy_mode", "trend") == "range" else ConfluenceATRStrategy()
         signal, skip_reason = strategy.get_signal(data, cfg)
         if signal is None or signal.side == "flat":
             _append_activity("signal", symbol, f"No entry: {skip_reason}")
             return
+        mode_label = "RSI/range" if getattr(cfg, "strategy_mode", "trend") == "range" else "RSI/MACD/trend"
         _append_activity(
             "signal",
             symbol,
-            f"{signal.side.upper()} RSI/MACD/trend | {signal.reason}",
+            f"{signal.side.upper()} {mode_label} | {signal.reason}",
             {"entry": signal.entry_price, "sl": signal.stop_loss, "tp": signal.take_profit},
         )
         leverage = min(cfg.max_leverage, 125)
@@ -399,7 +404,7 @@ def run_one_cycle() -> None:
         try:
             bal_list = binance_client.balance()
             usdt = next((b for b in bal_list if str(b.get("asset", "")).upper() == "USDT"), None)
-            available = float(usdt.get("availableBalance", 0)) if usdt else 0.0
+            available = float(usdt.get("availableBalance", 0) or 0) if usdt else 0.0
         except Exception:
             available = 0.0
         effective_margin = min(available * 0.98, cfg.max_usdt)

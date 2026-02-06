@@ -1,13 +1,14 @@
 """
-Autopilot API: config, start/stop, status, activity log.
+Autopilot API: config, start/stop, status, activity log, market regime.
 """
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from app.models.autopilot_config import AutopilotConfig
 from app.services import autopilot_service
+from app.services.market_regime import get_market_regime as get_market_regime_service
 
 router = APIRouter()
 
@@ -16,6 +17,9 @@ class AutopilotConfigUpdate(BaseModel):
     max_usdt: float | None = None
     max_leverage: int | None = None
     daily_loss_limit_usdt: float | None = None
+    strategy_mode: str | None = None  # "trend" | "range"
+    rsi_oversold: float | None = None
+    rsi_overbought: float | None = None
     symbol: str | None = None
     entry_tf: str | None = None
     trend_tf: str | None = None
@@ -75,3 +79,12 @@ def activity(limit: int = 100, mode: str = "all"):
     if mode not in ("all", "live"):
         mode = "all"
     return autopilot_service.get_activity(limit=min(limit, 200), mode=mode)
+
+
+@router.get("/market-regime")
+def market_regime(symbol: str | None = Query(None, description="e.g. BTCUSDT. Default from config.")) -> dict[str, Any]:
+    """1D ADX-based market regime: ranging vs trending for UI reference."""
+    if not symbol or not symbol.strip():
+        cfg = autopilot_service.get_config()
+        symbol = (cfg.symbol or "BTCUSDT").strip() or "BTCUSDT"
+    return get_market_regime_service(symbol.strip().upper() or "BTCUSDT")

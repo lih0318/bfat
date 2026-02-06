@@ -1,7 +1,7 @@
 """
 Autopilot configuration model. Saved to config_dir/autopilot.json for dev and Windows Standalone.
 """
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -11,6 +11,11 @@ class AutopilotConfig(BaseModel):
     max_usdt: float = Field(1000.0, description="Max USDT for Autopilot to use")
     max_leverage: int = Field(5, ge=1, le=125, description="Max leverage")
     daily_loss_limit_usdt: float = Field(0.0, description="Daily loss limit USDT (0=disabled)")
+    # Strategy mode: trend = Confluence+ATR, range = RSI mean reversion (sideways market)
+    strategy_mode: Literal["trend", "range"] = Field("trend", description="trend=follow trend, range=mean reversion in sideways")
+    # Range mode: RSI oversold -> long, RSI overbought -> short
+    rsi_oversold: float = Field(30.0, ge=0, le=100, description="Range mode: long when RSI <= this")
+    rsi_overbought: float = Field(70.0, ge=0, le=100, description="Range mode: short when RSI >= this")
     # Strategy params
     symbol: str = Field("BTCUSDT", description="Trading symbol")
     entry_tf: str = Field("15m", description="Entry timeframe e.g. 15m")

@@ -2,9 +2,11 @@
 Binance USDT-M Futures client wrapper using official binance-futures-connector.
 All Binance calls go through this layer for base_url and error handling.
 SL/TP use Algo Order API (POST /fapi/v1/algoOrder) due to -4120 on regular order endpoint.
+Uses server time sync to avoid "Timestamp for this request is outside of the recvWindow" errors.
 """
 import hashlib
 import hmac
+import logging
 import time
 from typing import Any, Optional
 from urllib.parse import urlencode
@@ -14,6 +16,11 @@ from binance.um_futures import UMFutures
 from binance.error import ClientError
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
+
+# Default recvWindow (ms). Use 10s to tolerate clock drift; Binance allows up to 60000.
+DEFAULT_RECV_WINDOW = 10000
 
 
 def _get_ws_base_url() -> str:
@@ -25,10 +32,34 @@ def _get_ws_base_url() -> str:
 
 
 class BinanceFuturesClient:
-    """Thin wrapper over UMFutures for fapi.binance.com / testnet."""
+    """Thin wrapper over UMFutures for fapi.binance.com / testnet. Syncs with Binance server time."""
 
     def __init__(self) -> None:
         self._client: Optional[UMFutures] = None
+        self._server_time_offset: float = 0.0  # seconds to add to time.time() to get server time
+        self._server_time_synced: bool = False
+
+    def _sync_server_time(self) -> None:
+        """Fetch Binance server time and set offset so timestamp in requests matches server."""
+        try:
+            url = f"{settings.fapi_base_url.rstrip('/')}/fapi/v1/time"
+            with httpx.Client(timeout=5.0) as client:
+                r = client.get(url)
+            r.raise_for_status()
+            data = r.json()
+            server_time_ms = int(data.get("serverTime", 0))
+            local_ms = int(time.time() * 1000)
+            self._server_time_offset = (server_time_ms - local_ms) / 1000.0
+            self._server_time_synced = True
+            logger.info("Binance server time synced: offset %.2fs", self._server_time_offset)
+        except Exception as e:
+            logger.warning("Binance server time sync failed: %s. Using local time.", e)
+
+    def _timestamp_ms(self) -> int:
+        """Return current timestamp in ms adjusted for Binance server time."""
+        if not self._server_time_synced:
+            self._sync_server_time()
+        return int((time.time() + self._server_time_offset) * 1000)
 
     @property
     def client(self) -> UMFutures:
@@ -48,10 +79,10 @@ class BinanceFuturesClient:
         return bool(settings.binance_api_key and settings.binance_api_secret)
 
     # --- Account ---
-    def balance(self, recv_window: int = 6000) -> list[dict[str, Any]]:
+    def balance(self, recv_window: int = DEFAULT_RECV_WINDOW) -> list[dict[str, Any]]:
         return self.client.balance(recvWindow=recv_window)
 
-    def account(self, recv_window: int = 6000) -> dict[str, Any]:
+    def account(self, recv_window: int = DEFAULT_RECV_WINDOW) -> dict[str, Any]:
         return self.client.account(recvWindow=recv_window)
 
     def income_history(
@@ -61,7 +92,7 @@ class BinanceFuturesClient:
         limit: int = 100,
         start_time: Optional[int] = None,
         end_time: Optional[int] = None,
-        recv_window: int = 6000,
+        recv_window: int = DEFAULT_RECV_WINDOW,
     ) -> list[dict[str, Any]]:
         """Get income history (e.g. REALIZED_PNL). Returns newest first."""
         params: dict[str, Any] = {"limit": limit, "recvWindow": recv_window}
@@ -104,23 +135,23 @@ class BinanceFuturesClient:
         return self.client.funding_rate(symbol=symbol, limit=limit)
 
     # --- Positions / Orders ---
-    def position_information(self, symbol: Optional[str] = None, recv_window: int = 6000) -> list[dict[str, Any]]:
+    def position_information(self, symbol: Optional[str] = None, recv_window: int = DEFAULT_RECV_WINDOW) -> list[dict[str, Any]]:
         if symbol:
             return self.client.get_position_risk(symbol=symbol, recvWindow=recv_window)
         return self.client.get_position_risk(recvWindow=recv_window)
 
-    def get_open_orders(self, symbol: str, recv_window: int = 6000) -> list[dict[str, Any]]:
+    def get_open_orders(self, symbol: str, recv_window: int = DEFAULT_RECV_WINDOW) -> list[dict[str, Any]]:
         return self.client.get_open_orders(symbol=symbol, recvWindow=recv_window)
 
-    def cancel_all_open_orders(self, symbol: str, recv_window: int = 6000) -> dict[str, Any]:
+    def cancel_all_open_orders(self, symbol: str, recv_window: int = DEFAULT_RECV_WINDOW) -> dict[str, Any]:
         """Cancel all open orders for the symbol (e.g. before flip to clear old SL/TP)."""
         return self.client.cancel_open_orders(symbol=symbol, recvWindow=recv_window)
 
     def _signed_request(self, method: str, path: str, params: dict[str, Any]) -> Any:
-        """Send signed request to Binance FAPI (for algo endpoints not in SDK)."""
+        """Send signed request to Binance FAPI (for algo endpoints not in SDK). Uses server-time-adjusted timestamp."""
         params = dict(params)
-        params.setdefault("recvWindow", 6000)
-        params.setdefault("timestamp", int(time.time() * 1000))
+        params.setdefault("recvWindow", DEFAULT_RECV_WINDOW)
+        params.setdefault("timestamp", self._timestamp_ms())
         query = urlencode(params)
         sig = hmac.new(
             settings.binance_api_secret.encode("utf-8"),
@@ -133,7 +164,7 @@ class BinanceFuturesClient:
         r.raise_for_status()
         return r.json()
 
-    def get_open_algo_orders(self, symbol: str, recv_window: int = 6000) -> list[dict[str, Any]]:
+    def get_open_algo_orders(self, symbol: str, recv_window: int = DEFAULT_RECV_WINDOW) -> list[dict[str, Any]]:
         """Get open algo orders for symbol (SL/TP are algo orders)."""
         data = self._signed_request("GET", "/fapi/v1/openAlgoOrders", {"symbol": symbol, "recvWindow": recv_window})
         return data if isinstance(data, list) else []
@@ -142,7 +173,7 @@ class BinanceFuturesClient:
         self,
         algo_id: Optional[int] = None,
         client_algo_id: Optional[str] = None,
-        recv_window: int = 6000,
+        recv_window: int = DEFAULT_RECV_WINDOW,
     ) -> dict[str, Any]:
         """Cancel one algo order by algoId or clientAlgoId."""
         params: dict[str, Any] = {"recvWindow": recv_window}
@@ -152,7 +183,7 @@ class BinanceFuturesClient:
             params["clientAlgoId"] = client_algo_id
         return self._signed_request("DELETE", "/fapi/v1/algoOrder", params)
 
-    def cancel_all_algo_orders(self, symbol: str, recv_window: int = 6000) -> None:
+    def cancel_all_algo_orders(self, symbol: str, recv_window: int = DEFAULT_RECV_WINDOW) -> None:
         """Cancel all open algo orders for the symbol (e.g. old SL/TP before flip)."""
         for order in self.get_open_algo_orders(symbol, recv_window):
             try:
@@ -173,7 +204,7 @@ class BinanceFuturesClient:
         reduce_only: bool = True,
         client_algo_id: Optional[str] = None,
         working_type: str = "CONTRACT_PRICE",
-        recv_window: int = 6000,
+        recv_window: int = DEFAULT_RECV_WINDOW,
     ) -> dict[str, Any]:
         """
         Place STOP_MARKET or TAKE_PROFIT_MARKET via Algo Order API (required since -4120).
@@ -188,7 +219,7 @@ class BinanceFuturesClient:
             "reduceOnly": "true" if reduce_only else "false",
             "workingType": working_type,
             "recvWindow": recv_window,
-            "timestamp": int(time.time() * 1000),
+            "timestamp": self._timestamp_ms(),
         }
         if quantity is not None:
             params["quantity"] = quantity
@@ -209,7 +240,7 @@ class BinanceFuturesClient:
         reduce_only: Optional[bool] = None,
         time_in_force: Optional[str] = None,
         new_client_order_id: Optional[str] = None,
-        recv_window: int = 6000,
+        recv_window: int = DEFAULT_RECV_WINDOW,
         **kwargs: Any,
     ) -> dict[str, Any]:
         params: dict[str, Any] = {
@@ -237,7 +268,7 @@ class BinanceFuturesClient:
         params.update(kwargs)
         return self.client.new_order(**params)
 
-    def set_leverage(self, symbol: str, leverage: int, recv_window: int = 6000) -> dict[str, Any]:
+    def set_leverage(self, symbol: str, leverage: int, recv_window: int = DEFAULT_RECV_WINDOW) -> dict[str, Any]:
         return self.client.change_leverage(symbol=symbol, leverage=leverage, recvWindow=recv_window)
 
 

@@ -17,14 +17,26 @@ interface ActivityItem {
   message: string
 }
 
+interface MarketRegime {
+  symbol: string
+  timeframe: string
+  adx: number | null
+  regime: string
+  trend_direction: string
+}
+
 export function AutopilotTab() {
   const [status, setStatus] = useState<AutopilotStatus | null>(null)
   const [activity, setActivity] = useState<ActivityItem[]>([])
+  const [marketRegime, setMarketRegime] = useState<MarketRegime | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [activityMode, setActivityMode] = useState<'all' | 'live'>('all')
   const formDirtyRef = useRef(false)
   const [form, setForm] = useState({
+    strategy_mode: 'trend' as 'trend' | 'range',
+    rsi_oversold: 30,
+    rsi_overbought: 70,
     max_usdt: 1000,
     max_leverage: 5,
     daily_loss_limit_usdt: 0,
@@ -50,6 +62,15 @@ export function AutopilotTab() {
       setActivity(Array.isArray(a) ? a : [])
       if (!formDirtyRef.current) {
         setForm((prev) => applyConfigToForm(c as Record<string, unknown>, prev))
+      }
+      const symbol = (c && typeof c === 'object' && (c as Record<string, unknown>).symbol)
+        ? String((c as Record<string, unknown>).symbol)
+        : 'BTCUSDT'
+      try {
+        const regime = await api.autopilot.marketRegime(symbol)
+        setMarketRegime(regime)
+      } catch {
+        setMarketRegime(null)
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -84,6 +105,9 @@ export function AutopilotTab() {
 
   const applyConfigToForm = (config: Record<string, unknown>, prev: typeof form) => ({
     ...prev,
+    strategy_mode: (config.strategy_mode === 'range' ? 'range' : 'trend') as 'trend' | 'range',
+    rsi_oversold: Number(config.rsi_oversold ?? prev.rsi_oversold ?? 30),
+    rsi_overbought: Number(config.rsi_overbought ?? prev.rsi_overbought ?? 70),
     max_usdt: Number(config.max_usdt ?? prev.max_usdt),
     max_leverage: Number(config.max_leverage ?? prev.max_leverage),
     daily_loss_limit_usdt: Number(config.daily_loss_limit_usdt ?? prev.daily_loss_limit_usdt),
@@ -103,6 +127,9 @@ export function AutopilotTab() {
       setError(null)
       const reentry = Math.max(0, Math.min(1440, Math.round(Number(form.reentry_cooldown_minutes)) || 0))
       const res = await api.autopilot.putConfig({
+        strategy_mode: form.strategy_mode,
+        rsi_oversold: form.rsi_oversold,
+        rsi_overbought: form.rsi_overbought,
         max_usdt: form.max_usdt,
         max_leverage: form.max_leverage,
         daily_loss_limit_usdt: form.daily_loss_limit_usdt,
@@ -149,11 +176,84 @@ export function AutopilotTab() {
             </button>
           </div>
         </div>
+        <div className="richman-regime-card">
+          <h3>Market regime (1D)</h3>
+          {marketRegime ? (
+            <>
+              <p className={`regime-value regime--${marketRegime.regime}`}>
+                {marketRegime.regime === 'ranging' ? 'Ranging (횡보)' : 'Trending (추세)'}
+                {marketRegime.adx != null && (
+                  <span className="regime-adx"> ADX: {marketRegime.adx}</span>
+                )}
+              </p>
+              {marketRegime.regime === 'trending' && marketRegime.trend_direction !== 'neutral' && (
+                <p className="regime-direction">
+                  {marketRegime.trend_direction === 'up' ? '↑ 상승 추세' : '↓ 하락 추세'}
+                </p>
+              )}
+              <p className="regime-hint">
+                {marketRegime.regime === 'ranging'
+                  ? '1D ADX < 25. Range 전략 고려.'
+                  : '1D ADX ≥ 25. Trend 전략 고려.'}
+              </p>
+            </>
+          ) : (
+            <p className="regime-unknown">로딩 중…</p>
+          )}
+        </div>
       </div>
       <div className="richman-top">
         <div className="richman-config-card">
           <h3>Settings</h3>
           <div className="config-sections">
+            <section className="config-section">
+              <h4>Strategy / Market mode</h4>
+              <div className="config-row">
+                <label>
+                  <span>Mode</span>
+                  <select
+                    value={form.strategy_mode}
+                    onChange={(e) => {
+                      formDirtyRef.current = true
+                      setForm((f) => ({ ...f, strategy_mode: e.target.value as 'trend' | 'range' }))
+                    }}
+                  >
+                    <option value="trend">Trend (추세) — 추세 추종</option>
+                    <option value="range">Range (횡보) — RSI 평균 회귀</option>
+                  </select>
+                </label>
+                {form.strategy_mode === 'range' && (
+                  <>
+                    <label>
+                      <span>RSI 과매도 (롱 진입)</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={form.rsi_oversold}
+                        onChange={(e) => {
+                          formDirtyRef.current = true
+                          setForm((f) => ({ ...f, rsi_oversold: Number(e.target.value) || 30 }))
+                        }}
+                      />
+                    </label>
+                    <label>
+                      <span>RSI 과매수 (숏 진입)</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={form.rsi_overbought}
+                        onChange={(e) => {
+                          formDirtyRef.current = true
+                          setForm((f) => ({ ...f, rsi_overbought: Number(e.target.value) || 70 }))
+                        }}
+                      />
+                    </label>
+                  </>
+                )}
+              </div>
+            </section>
             <section className="config-section">
               <h4>Capital / Leverage</h4>
               <div className="config-row">

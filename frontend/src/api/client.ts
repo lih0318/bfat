@@ -68,6 +68,16 @@ export const api = {
         `/api/autopilot/activity${q ? `?${q}` : ''}`
       )
     },
+    marketRegime: (symbol?: string) => {
+      const q = symbol != null && symbol !== '' ? `?symbol=${encodeURIComponent(symbol)}` : ''
+      return fetchApi<{
+        symbol: string
+        timeframe: string
+        adx: number | null
+        regime: string
+        trend_direction: string
+      }>(`/api/autopilot/market-regime${q}`)
+    },
   },
   journal: {
     list: (limit?: number, mode?: 'all' | 'live') => {
