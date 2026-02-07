@@ -1,6 +1,27 @@
 import { useEffect, useRef, useState } from 'react'
-import { api } from '../api/client'
+import { api, type MarketRegimeResponse, type RegimeTf } from '../api/client'
 import './AutopilotTab.css'
+
+function RegimeBlock({ tf }: { tf: RegimeTf }) {
+  return (
+    <>
+      <p className={`regime-value regime--${tf.regime}`}>
+        {tf.regime === 'ranging' ? 'Ranging (횡보)' : 'Trending (추세)'}
+        {tf.adx != null && <span className="regime-adx"> ADX: {tf.adx}</span>}
+      </p>
+      {tf.regime === 'trending' && tf.trend_direction !== 'neutral' && (
+        <p className="regime-direction">
+          {tf.trend_direction === 'up' ? '↑ 상승 추세' : '↓ 하락 추세'}
+        </p>
+      )}
+      <p className="regime-hint">
+        {tf.regime === 'ranging'
+          ? `${tf.timeframe.toUpperCase()} ADX < 25. Range 전략 고려.`
+          : `${tf.timeframe.toUpperCase()} ADX ≥ 25. Trend 전략 고려.`}
+      </p>
+    </>
+  )
+}
 
 interface AutopilotStatus {
   running: boolean
@@ -17,18 +38,10 @@ interface ActivityItem {
   message: string
 }
 
-interface MarketRegime {
-  symbol: string
-  timeframe: string
-  adx: number | null
-  regime: string
-  trend_direction: string
-}
-
 export function AutopilotTab() {
   const [status, setStatus] = useState<AutopilotStatus | null>(null)
   const [activity, setActivity] = useState<ActivityItem[]>([])
-  const [marketRegime, setMarketRegime] = useState<MarketRegime | null>(null)
+  const [marketRegime, setMarketRegime] = useState<MarketRegimeResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [activityMode, setActivityMode] = useState<'all' | 'live'>('all')
@@ -176,31 +189,23 @@ export function AutopilotTab() {
             </button>
           </div>
         </div>
-        <div className="richman-regime-card">
-          <h3>Market regime (1D)</h3>
-          {marketRegime ? (
-            <>
-              <p className={`regime-value regime--${marketRegime.regime}`}>
-                {marketRegime.regime === 'ranging' ? 'Ranging (횡보)' : 'Trending (추세)'}
-                {marketRegime.adx != null && (
-                  <span className="regime-adx"> ADX: {marketRegime.adx}</span>
-                )}
-              </p>
-              {marketRegime.regime === 'trending' && marketRegime.trend_direction !== 'neutral' && (
-                <p className="regime-direction">
-                  {marketRegime.trend_direction === 'up' ? '↑ 상승 추세' : '↓ 하락 추세'}
-                </p>
-              )}
-              <p className="regime-hint">
-                {marketRegime.regime === 'ranging'
-                  ? '1D ADX < 25. Range 전략 고려.'
-                  : '1D ADX ≥ 25. Trend 전략 고려.'}
-              </p>
-            </>
-          ) : (
+        {marketRegime ? (
+          <>
+            <div className="richman-regime-card">
+              <h3>Market regime — 1D (큰 시야)</h3>
+              <RegimeBlock tf={marketRegime['1d']} />
+            </div>
+            <div className="richman-regime-card">
+              <h3>Market regime — 1h (세부)</h3>
+              <RegimeBlock tf={marketRegime['1h']} />
+            </div>
+          </>
+        ) : (
+          <div className="richman-regime-card">
+            <h3>Market regime</h3>
             <p className="regime-unknown">로딩 중…</p>
-          )}
-        </div>
+          </div>
+        )}
       </div>
       <div className="richman-top">
         <div className="richman-config-card">

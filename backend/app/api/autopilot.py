@@ -83,7 +83,7 @@ def activity(limit: int = 100, mode: str = "all"):
 
 @router.get("/market-regime")
 def market_regime(symbol: str | None = Query(None, description="e.g. BTCUSDT. Default from config.")) -> dict[str, Any]:
-    """1D ADX-based market regime: ranging vs trending for UI reference."""
+    """1D + 1h ADX-based market regime: ranging vs trending for UI (big picture + trading timeframe)."""
     if not symbol or not symbol.strip():
         cfg = autopilot_service.get_config()
         symbol = (cfg.symbol or "BTCUSDT").strip() or "BTCUSDT"

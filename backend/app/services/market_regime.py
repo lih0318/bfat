@@ -1,5 +1,5 @@
 """
-Market regime (1D): ADX-based ranging vs trending for UI reference.
+Market regime: ADX-based ranging vs trending for UI. Provides both 1D (big picture) and 1h (trading timeframe).
 """
 import logging
 from typing import Any
@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 ADX_PERIOD = 14
 ADX_RANGING_THRESHOLD = 25.0
+REGIME_TIMEFRAMES = ("1d", "1h")
 
 
 def _wilder_smooth(values: list[float], period: int) -> list[float]:
@@ -95,33 +96,42 @@ def compute_adx(
     return (adx, plus_di, minus_di)
 
 
-def get_market_regime(symbol: str) -> dict[str, Any]:
-    """
-    Fetch 1D klines for symbol, compute ADX, return regime for UI.
-    Returns: { symbol, timeframe: "1d", adx, regime: "ranging"|"trending", trend_direction: "up"|"down"|"neutral" }.
-    """
-    result: dict[str, Any] = {
-        "symbol": symbol.upper(),
-        "timeframe": "1d",
+def _regime_for_timeframe(symbol: str, interval: str) -> dict[str, Any]:
+    """Compute ADX regime for one timeframe. Returns { timeframe, adx, regime, trend_direction }."""
+    out: dict[str, Any] = {
+        "timeframe": interval,
         "adx": None,
         "regime": "unknown",
         "trend_direction": "neutral",
     }
     try:
-        raw = binance_client.klines(symbol=symbol.upper(), interval="1d", limit=60)
+        limit = 60 if interval == "1d" else 80
+        raw = binance_client.klines(symbol=symbol.upper(), interval=interval, limit=limit)
         if not raw or len(raw) < ADX_PERIOD + 2:
-            return result
+            return out
         highs = [float(k[2]) for k in raw]
         lows = [float(k[3]) for k in raw]
         closes = [float(k[4]) for k in raw]
         computed = compute_adx(highs, lows, closes, ADX_PERIOD)
         if computed is None:
-            return result
+            return out
         adx, plus_di, minus_di = computed
-        result["adx"] = round(adx, 2)
-        result["regime"] = "ranging" if adx < ADX_RANGING_THRESHOLD else "trending"
+        out["adx"] = round(adx, 2)
+        out["regime"] = "ranging" if adx < ADX_RANGING_THRESHOLD else "trending"
         if adx >= ADX_RANGING_THRESHOLD:
-            result["trend_direction"] = "up" if plus_di > minus_di else "down"
+            out["trend_direction"] = "up" if plus_di > minus_di else "down"
     except Exception as e:
-        logger.warning("Market regime computation failed for %s: %s", symbol, e)
+        logger.warning("Market regime failed for %s %s: %s", symbol, interval, e)
+    return out
+
+
+def get_market_regime(symbol: str) -> dict[str, Any]:
+    """
+    Fetch 1D and 1h klines, compute ADX for each, return both for UI.
+    Returns: { symbol, "1d": { timeframe, adx, regime, trend_direction }, "1h": { ... } }.
+    """
+    sym = symbol.upper()
+    result: dict[str, Any] = {"symbol": sym}
+    for tf in REGIME_TIMEFRAMES:
+        result[tf] = _regime_for_timeframe(sym, tf)
     return result
