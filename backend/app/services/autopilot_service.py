@@ -34,6 +34,8 @@ _daily_reset_date: str = ""
 _cycle_interval_sec = 60
 _loop_thread: Any = None
 _stop_loop = False
+# Pending limit orders: key=symbol, value={"client_order_id", "placed_at", "side", "qty", "sl", "tp", "limit_price", "signal_side"}
+_pending_limit_orders: dict[str, dict[str, Any]] = {}
 
 
 def _today_utc() -> str:
@@ -188,6 +190,90 @@ def stop_autopilot() -> dict[str, Any]:
     return {"ok": True, "message": "Stopped"}
 
 
+def _check_pending_limit_orders(cfg: AutopilotConfig) -> None:
+    """Check pending limit orders: handle fill, TTL expiry, or keep waiting."""
+    global _pending_limit_orders
+    if not _pending_limit_orders:
+        return
+    ttl_sec = getattr(cfg, "limit_ttl_minutes", 15) * 60.0
+    symbols_done: list[str] = []
+    for sym, info in list(_pending_limit_orders.items()):
+        try:
+            open_orders = binance_client.get_open_orders(symbol=sym)
+            # Check if our order is still open
+            our_order_open = any(
+                o.get("clientOrderId") == info["client_order_id"]
+                for o in open_orders
+            )
+            if not our_order_open:
+                # Order is no longer open → filled (or was cancelled externally)
+                # Check if position actually exists (= filled)
+                pos = _get_live_position(sym)
+                if pos is not None:
+                    _append_activity(
+                        "system", sym,
+                        f"Limit order filled @ {info['limit_price']}. Setting SL/TP...",
+                    )
+                    # Set SL/TP algo orders
+                    stop_side = "SELL" if info["signal_side"] == "long" else "BUY"
+                    sl_price = info["sl"]
+                    tp_price = info["tp"]
+                    try:
+                        binance_client.new_algo_order(
+                            symbol=sym, side=stop_side, order_type="STOP_MARKET",
+                            trigger_price=sl_price, quantity=info["qty"],
+                            reduce_only=True,
+                            client_algo_id=f"{info['client_order_id']}_sl",
+                        )
+                    except Exception as e:
+                        _append_activity("error", sym, f"SL order after limit fill failed: {e}")
+                    try:
+                        binance_client.new_algo_order(
+                            symbol=sym, side=stop_side, order_type="TAKE_PROFIT_MARKET",
+                            trigger_price=tp_price, quantity=info["qty"],
+                            reduce_only=True,
+                            client_algo_id=f"{info['client_order_id']}_tp",
+                        )
+                    except Exception as e:
+                        _append_activity("error", sym, f"TP order after limit fill failed: {e}")
+                    # Journal entry
+                    try:
+                        journal_append({
+                            "type": "entry",
+                            "symbol": sym,
+                            "side": info["side"],
+                            "entry_price": info["limit_price"],
+                            "qty": info["qty"],
+                            "sl": sl_price,
+                            "tp": tp_price,
+                            "client_order_id": info["client_order_id"],
+                            "entry_ts": int(time.time() * 1000),
+                        })
+                    except Exception as je:
+                        logger.warning("Journal append after limit fill failed: %s", je)
+                else:
+                    _append_activity("system", sym, "Limit order disappeared but no position found (externally cancelled?)")
+                symbols_done.append(sym)
+            else:
+                # Order still open — check TTL
+                elapsed = time.time() - info["placed_at"]
+                if elapsed >= ttl_sec:
+                    try:
+                        binance_client.cancel_all_open_orders(symbol=sym)
+                    except Exception as e:
+                        logger.warning("Cancel expired limit order failed: %s", e)
+                    _append_activity(
+                        "system", sym,
+                        f"Limit order expired (TTL {int(elapsed)}s >= {int(ttl_sec)}s). Cancelled.",
+                    )
+                    symbols_done.append(sym)
+                # else: still waiting, do nothing
+        except Exception as e:
+            logger.warning("Pending limit check failed for %s: %s", sym, e)
+    for sym in symbols_done:
+        _pending_limit_orders.pop(sym, None)
+
+
 def run_one_cycle() -> None:
     """Single cycle: fetch data, compute signal, check safety, place order."""
     global _autopilot_running, _autopilot_status, _daily_realized_pnl
@@ -203,6 +289,10 @@ def run_one_cycle() -> None:
         return
     if not _in_trading_hours(cfg.trading_hours_utc):
         return
+
+    # ── Manage pending limit orders ──────────────────────────────
+    _check_pending_limit_orders(cfg)
+
     try:
         lp = _get_live_position(symbol)
         has_position_now = lp is not None
@@ -394,6 +484,19 @@ def run_one_cycle() -> None:
 
         do_entry = False
         if current_side is None:
+            # If there's a pending limit order in opposite direction, cancel it first
+            if symbol in _pending_limit_orders:
+                pending = _pending_limit_orders[symbol]
+                if pending["side"] != side:
+                    try:
+                        binance_client.cancel_all_open_orders(symbol=symbol)
+                    except Exception as e:
+                        logger.warning("Cancel pending limit (opposite signal): %s", e)
+                    _pending_limit_orders.pop(symbol, None)
+                    _append_activity("system", symbol, f"Pending limit cancelled (opposite signal: was {pending['side']}, now {side})")
+                else:
+                    _append_activity("skip", symbol, "Limit order already pending (same direction)")
+                    return
             cooldown = cfg.reentry_cooldown_minutes * 60.0
             if cooldown > 0 and symbol in _symbol_exit_ts:
                 if (time.time() - _symbol_exit_ts[symbol]) < cooldown:
@@ -421,6 +524,8 @@ def run_one_cycle() -> None:
                 )
                 return
             # Live flip: cancel all open orders and algo orders (old SL/TP) for symbol, then close position, then new entry
+            # Also clean up any pending limit order
+            _pending_limit_orders.pop(symbol, None)
             pos = _get_live_position(symbol)
             if not pos:
                 return
@@ -498,91 +603,134 @@ def run_one_cycle() -> None:
             logger.warning("Cancel algo orders before entry: %s", e)
         client_order_id = f"ap_{uuid.uuid4().hex[:16]}"
 
-        # Attempt order; if margin insufficient, retry once with reduced qty (80%)
-        order_placed = False
-        for attempt in range(2):
+        # ── Entry type: LIMIT or MARKET ──────────────────────────
+        entry_type = getattr(cfg, "entry_type", "limit")
+
+        if entry_type == "limit":
+            # Duplicate prevention: skip if a limit order is already pending for this symbol
+            if symbol in _pending_limit_orders:
+                _append_activity("skip", symbol, "Limit order already pending")
+                return
+
+            limit_price = ExchangeInfoCache.round_price(symbol, signal.entry_price)
             try:
                 binance_client.new_order(
                     symbol=symbol,
                     side=side,
-                    order_type="MARKET",
+                    order_type="LIMIT",
                     quantity=qty,
-                    new_client_order_id=client_order_id if attempt == 0 else f"ap_{uuid.uuid4().hex[:16]}",
+                    price=limit_price,
+                    time_in_force="GTC",
+                    new_client_order_id=client_order_id,
                 )
-                order_placed = True
-                break
             except Exception as e:
                 err_msg = str(e)
-                is_margin_err = (
-                    "-2019" in err_msg
-                    or "Margin is insufficient" in err_msg
-                    or "insufficient" in err_msg.lower()
-                )
-                if is_margin_err and attempt == 0:
-                    # Retry with 80% of original qty
-                    qty = qty * 0.80
-                    if step > 0:
-                        qty = round(qty - (qty % step), prec)
-                    if (qty * current_price) < min_notional:
-                        _append_activity(
-                            "error",
-                            symbol,
-                            f"Margin insufficient even after retry. Available: {available:.2f} USDT, required margin > available.",
-                        )
-                        return
-                    _append_activity("system", symbol, f"Margin insufficient, retrying with reduced qty={qty:.4f}")
-                    continue
-                elif is_margin_err:
+                if "-2019" in err_msg or "Margin is insufficient" in err_msg or "insufficient" in err_msg.lower():
                     _append_activity(
-                        "error",
-                        symbol,
-                        f"Entry order failed: Margin is insufficient (available {available:.2f} USDT). Reduce max_usdt or leverage.",
+                        "error", symbol,
+                        f"Limit order failed: Margin insufficient (available {available:.2f} USDT). Reduce max_usdt or leverage.",
                     )
                 else:
-                    _append_activity("error", symbol, f"Entry order failed: {err_msg}")
+                    _append_activity("error", symbol, f"Limit order failed: {err_msg}")
                 return
-        if not order_placed:
-            return
-        _append_activity("entry", symbol, f"{side} qty={qty} @ {current_price:.2f} SL={sl_price:.2f} TP={tp_price:.2f}")
-        try:
-            journal_append({
-                "type": "entry",
-                "symbol": symbol,
+            # Register pending limit order (SL/TP will be set after fill in _check_pending_limit_orders)
+            _pending_limit_orders[symbol] = {
+                "client_order_id": client_order_id,
+                "placed_at": time.time(),
                 "side": side,
-                "entry_price": current_price,
                 "qty": qty,
                 "sl": sl_price,
                 "tp": tp_price,
-                "client_order_id": client_order_id,
-                "entry_ts": int(time.time() * 1000),  # ms timestamp for exit PnL lookup
-            })
-        except Exception as je:
-            logger.warning("Journal append failed: %s", je)
-        stop_side = "SELL" if signal.side == "long" else "BUY"
-        try:
-            binance_client.new_algo_order(
-                symbol=symbol,
-                side=stop_side,
-                order_type="STOP_MARKET",
-                trigger_price=sl_price,
-                quantity=qty,
-                reduce_only=True,
-                client_algo_id=f"{client_order_id}_sl",
+                "limit_price": limit_price,
+                "signal_side": signal.side,
+            }
+            _append_activity(
+                "entry", symbol,
+                f"LIMIT {side} qty={qty} @ {limit_price:.2f} (current={current_price:.2f}) SL={sl_price:.2f} TP={tp_price:.2f} TTL={getattr(cfg, 'limit_ttl_minutes', 15)}min",
             )
-        except Exception as e:
-            _append_activity("error", symbol, f"SL order failed: {e}")
-        try:
-            binance_client.new_algo_order(
-                symbol=symbol,
-                side=stop_side,
-                order_type="TAKE_PROFIT_MARKET",
-                trigger_price=tp_price,
-                quantity=qty,
-                reduce_only=True,
-                client_algo_id=f"{client_order_id}_tp",
-            )
-        except Exception as e:
-            _append_activity("error", symbol, f"TP order failed: {e}")
+        else:
+            # ── MARKET order (fallback) ──────────────────────────
+            order_placed = False
+            for attempt in range(2):
+                try:
+                    binance_client.new_order(
+                        symbol=symbol,
+                        side=side,
+                        order_type="MARKET",
+                        quantity=qty,
+                        new_client_order_id=client_order_id if attempt == 0 else f"ap_{uuid.uuid4().hex[:16]}",
+                    )
+                    order_placed = True
+                    break
+                except Exception as e:
+                    err_msg = str(e)
+                    is_margin_err = (
+                        "-2019" in err_msg
+                        or "Margin is insufficient" in err_msg
+                        or "insufficient" in err_msg.lower()
+                    )
+                    if is_margin_err and attempt == 0:
+                        qty = qty * 0.80
+                        if step > 0:
+                            qty = round(qty - (qty % step), prec)
+                        if (qty * current_price) < min_notional:
+                            _append_activity(
+                                "error", symbol,
+                                f"Margin insufficient even after retry. Available: {available:.2f} USDT.",
+                            )
+                            return
+                        _append_activity("system", symbol, f"Margin insufficient, retrying with reduced qty={qty:.4f}")
+                        continue
+                    elif is_margin_err:
+                        _append_activity(
+                            "error", symbol,
+                            f"Entry order failed: Margin insufficient (available {available:.2f} USDT). Reduce max_usdt or leverage.",
+                        )
+                    else:
+                        _append_activity("error", symbol, f"Entry order failed: {err_msg}")
+                    return
+            if not order_placed:
+                return
+            _append_activity("entry", symbol, f"MARKET {side} qty={qty} @ {current_price:.2f} SL={sl_price:.2f} TP={tp_price:.2f}")
+            try:
+                journal_append({
+                    "type": "entry",
+                    "symbol": symbol,
+                    "side": side,
+                    "entry_price": current_price,
+                    "qty": qty,
+                    "sl": sl_price,
+                    "tp": tp_price,
+                    "client_order_id": client_order_id,
+                    "entry_ts": int(time.time() * 1000),
+                })
+            except Exception as je:
+                logger.warning("Journal append failed: %s", je)
+            stop_side = "SELL" if signal.side == "long" else "BUY"
+            try:
+                binance_client.new_algo_order(
+                    symbol=symbol,
+                    side=stop_side,
+                    order_type="STOP_MARKET",
+                    trigger_price=sl_price,
+                    quantity=qty,
+                    reduce_only=True,
+                    client_algo_id=f"{client_order_id}_sl",
+                )
+            except Exception as e:
+                _append_activity("error", symbol, f"SL order failed: {e}")
+            try:
+                binance_client.new_algo_order(
+                    symbol=symbol,
+                    side=stop_side,
+                    order_type="TAKE_PROFIT_MARKET",
+                    trigger_price=tp_price,
+                    quantity=qty,
+                    reduce_only=True,
+                    client_algo_id=f"{client_order_id}_tp",
+                )
+            except Exception as e:
+                _append_activity("error", symbol, f"TP order failed: {e}")
     except Exception as e:
         logger.exception("Autopilot cycle error: %s", e)
         _append_activity("error", symbol, str(e))

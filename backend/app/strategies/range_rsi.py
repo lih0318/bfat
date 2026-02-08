@@ -8,6 +8,16 @@ from app.models.autopilot_config import AutopilotConfig
 from app.strategies.base import BaseStrategy, MarketData, MarketDataCandle, SignalResult
 
 
+def _ema(prices: list[float], period: int) -> float:
+    if not prices or len(prices) < period:
+        return prices[-1] if prices else 0.0
+    k = 2.0 / (period + 1)
+    ema_val = sum(prices[:period]) / period
+    for p in prices[period:]:
+        ema_val = p * k + ema_val * (1 - k)
+    return ema_val
+
+
 def _rsi(closes: list[float], period: int) -> float:
     if len(closes) < period + 1:
         return 50.0
@@ -63,24 +73,40 @@ class RangeRSIStrategy(BaseStrategy):
             return (None, f"volume_ratio {data.volume_ratio:.2f} < min {config.volume_ratio_min}")
         oversold = getattr(config, "rsi_oversold", 30.0)
         overbought = getattr(config, "rsi_overbought", 70.0)
+        # Price filter & limit offset settings
+        filter_mult = getattr(config, "price_filter_atr_mult", 0.0)
+        offset_mult = getattr(config, "limit_offset_atr_mult", 0.0)
+        ema20 = _ema(closes, 20) if len(closes) >= 20 else closes[-1]
         if rsi_val <= oversold:
-            sl = price - atr_val * config.atr_sl_mult
-            tp = price + atr_val * config.atr_tp_mult
+            # Price filter: reject if price already ran too far above EMA
+            if filter_mult > 0:
+                threshold = ema20 + atr_val * filter_mult
+                if price > threshold:
+                    return (None, f"Price filter(long): {price:.2f} > EMA20({ema20:.2f})+ATR*{filter_mult} = {threshold:.2f}")
+            entry = price - atr_val * offset_mult
+            sl = entry - atr_val * config.atr_sl_mult
+            tp = entry + atr_val * config.atr_tp_mult
             return (SignalResult(
                 side="long",
-                entry_price=price,
+                entry_price=entry,
                 stop_loss=sl,
                 take_profit=tp,
-                reason=f"RSI={rsi_val:.1f}<=oversold_{oversold} ATR={atr_val:.2f}",
+                reason=f"RSI={rsi_val:.1f}<=oversold_{oversold} ATR={atr_val:.2f} entry={entry:.2f}",
             ), "")
         if rsi_val >= overbought:
-            sl = price + atr_val * config.atr_sl_mult
-            tp = price - atr_val * config.atr_tp_mult
+            # Price filter: reject if price already dropped too far below EMA
+            if filter_mult > 0:
+                threshold = ema20 - atr_val * filter_mult
+                if price < threshold:
+                    return (None, f"Price filter(short): {price:.2f} < EMA20({ema20:.2f})-ATR*{filter_mult} = {threshold:.2f}")
+            entry = price + atr_val * offset_mult
+            sl = entry + atr_val * config.atr_sl_mult
+            tp = entry - atr_val * config.atr_tp_mult
             return (SignalResult(
                 side="short",
-                entry_price=price,
+                entry_price=entry,
                 stop_loss=sl,
                 take_profit=tp,
-                reason=f"RSI={rsi_val:.1f}>=overbought_{overbought} ATR={atr_val:.2f}",
+                reason=f"RSI={rsi_val:.1f}>=overbought_{overbought} ATR={atr_val:.2f} entry={entry:.2f}",
             ), "")
         return (None, f"RSI={rsi_val:.1f} in range (need <={oversold} long or >={overbought} short)")

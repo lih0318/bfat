@@ -57,6 +57,10 @@ export function AutopilotTab() {
     symbol: 'BTCUSDT',
     entry_tf: '15m',
     trend_tf: '1h',
+    entry_type: 'limit' as 'limit' | 'market',
+    price_filter_atr_mult: 0.3,
+    limit_offset_atr_mult: 0.15,
+    limit_ttl_minutes: 15,
     allow_position_flip: true,
     flip_fee_bps: 8,
     flip_slippage_bps: 5,
@@ -128,6 +132,10 @@ export function AutopilotTab() {
     symbol: String(config.symbol ?? prev.symbol),
     entry_tf: String(config.entry_tf ?? prev.entry_tf),
     trend_tf: String(config.trend_tf ?? prev.trend_tf),
+    entry_type: (['limit', 'market'].includes(String(config.entry_type)) ? String(config.entry_type) : prev.entry_type) as 'limit' | 'market',
+    price_filter_atr_mult: Number(config.price_filter_atr_mult ?? prev.price_filter_atr_mult),
+    limit_offset_atr_mult: Number(config.limit_offset_atr_mult ?? prev.limit_offset_atr_mult),
+    limit_ttl_minutes: Number(config.limit_ttl_minutes ?? prev.limit_ttl_minutes),
     allow_position_flip: Boolean(config.allow_position_flip ?? prev.allow_position_flip),
     flip_fee_bps: Number(config.flip_fee_bps ?? prev.flip_fee_bps),
     flip_slippage_bps: Number(config.flip_slippage_bps ?? prev.flip_slippage_bps),
@@ -150,6 +158,10 @@ export function AutopilotTab() {
         symbol: form.symbol,
         entry_tf: form.entry_tf,
         trend_tf: form.trend_tf,
+        entry_type: form.entry_type,
+        price_filter_atr_mult: form.price_filter_atr_mult,
+        limit_offset_atr_mult: form.limit_offset_atr_mult,
+        limit_ttl_minutes: form.limit_ttl_minutes,
         allow_position_flip: form.allow_position_flip,
         flip_fee_bps: form.flip_fee_bps,
         flip_slippage_bps: form.flip_slippage_bps,
@@ -283,6 +295,60 @@ export function AutopilotTab() {
                     onChange={(e) => { formDirtyRef.current = true; setForm((f) => ({ ...f, max_leverage: Number(e.target.value) || 1 })) }}
                   />
                 </label>
+              </div>
+            </section>
+            <section className="config-section">
+              <h4>Entry Order</h4>
+              <div className="config-row">
+                <label>
+                  <span>Entry Type</span>
+                  <select
+                    value={form.entry_type}
+                    onChange={(e) => {
+                      formDirtyRef.current = true
+                      setForm((f) => ({ ...f, entry_type: e.target.value as 'limit' | 'market' }))
+                    }}
+                  >
+                    <option value="limit">Limit (가격필터 + 지정가)</option>
+                    <option value="market">Market (즉시 시장가)</option>
+                  </select>
+                </label>
+                {form.entry_type === 'limit' && (
+                  <>
+                    <label>
+                      <span>Price Filter (ATR x)</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={2}
+                        step={0.05}
+                        value={form.price_filter_atr_mult}
+                        onChange={(e) => { formDirtyRef.current = true; setForm((f) => ({ ...f, price_filter_atr_mult: Number(e.target.value) || 0 })) }}
+                      />
+                    </label>
+                    <label>
+                      <span>Limit Offset (ATR x)</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={form.limit_offset_atr_mult}
+                        onChange={(e) => { formDirtyRef.current = true; setForm((f) => ({ ...f, limit_offset_atr_mult: Number(e.target.value) || 0 })) }}
+                      />
+                    </label>
+                    <label>
+                      <span>Limit TTL (분)</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={120}
+                        value={form.limit_ttl_minutes}
+                        onChange={(e) => { formDirtyRef.current = true; setForm((f) => ({ ...f, limit_ttl_minutes: Math.max(1, Number(e.target.value) || 15) })) }}
+                      />
+                    </label>
+                  </>
+                )}
               </div>
             </section>
             <section className="config-section">

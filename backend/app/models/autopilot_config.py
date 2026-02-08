@@ -35,6 +35,14 @@ class AutopilotConfig(BaseModel):
     flip_fee_bps: float = Field(8.0, ge=0, le=100, description="Fee in basis points per leg (e.g. 8 = 0.08%)")
     flip_slippage_bps: float = Field(5.0, ge=0, le=100, description="Slippage estimate in bps per leg")
     flip_min_edge_ratio: float = Field(1.5, gt=0, le=10, description="New position upside must be >= this × flip cost")
+    # Entry order type: limit = price filter + limit order, market = instant market order (fallback)
+    entry_type: Literal["limit", "market"] = Field("limit", description="limit=price filter+limit order, market=instant market order")
+    # Price filter: only enter if price is within EMA(20) ± ATR × this value
+    price_filter_atr_mult: float = Field(0.3, ge=0, le=2.0, description="Price filter: entry within EMA±ATR×this (0=disabled)")
+    # Limit order offset: place order at price ± ATR × this value (more favorable)
+    limit_offset_atr_mult: float = Field(0.15, ge=0, le=1.0, description="Limit order offset from current price (ATR×)")
+    # Limit order TTL: cancel unfilled limit order after N minutes
+    limit_ttl_minutes: int = Field(15, ge=1, le=120, description="Cancel unfilled limit order after N minutes")
     trading_hours_utc: Optional[str] = Field(None, description="e.g. 08:00-16:00 (UTC)")
     alerts_telegram_bot_token: Optional[str] = Field(None)
     alerts_telegram_chat_id: Optional[str] = Field(None)
