@@ -453,14 +453,22 @@ def run_one_cycle() -> None:
         if not do_entry:
             return
 
-        # Live: size position by actual available balance (use up to 98%, capped by max_usdt)
+        # Set leverage FIRST — Binance computes margin based on the current leverage setting.
+        # If we check balance before setting leverage, the available margin could be wrong.
+        try:
+            binance_client.set_leverage(symbol=symbol, leverage=leverage)
+        except Exception as e:
+            logger.warning("Set leverage failed: %s", e)
+
+        # Live: size position by actual available balance (use up to 90%, capped by max_usdt)
+        # 90% buffer accounts for: funding fees, price slippage, maintenance margin, rounding
         try:
             bal_list = binance_client.balance()
             usdt = next((b for b in bal_list if str(b.get("asset", "")).upper() == "USDT"), None)
             available = float(usdt.get("availableBalance", 0) or 0) if usdt else 0.0
         except Exception:
             available = 0.0
-        effective_margin = min(available * 0.98, cfg.max_usdt)
+        effective_margin = min(available * 0.90, cfg.max_usdt)
         min_margin = 5.0
         if effective_margin < min_margin:
             _append_activity(
@@ -485,32 +493,55 @@ def run_one_cycle() -> None:
             _append_activity("skip", symbol, f"Balance too low for min notional {min_notional} USDT (available {available:.2f} USDT)")
             return
         try:
-            binance_client.set_leverage(symbol=symbol, leverage=leverage)
-        except Exception as e:
-            logger.warning("Set leverage failed: %s", e)
-        try:
             binance_client.cancel_all_algo_orders(symbol=symbol)
         except Exception as e:
             logger.warning("Cancel algo orders before entry: %s", e)
         client_order_id = f"ap_{uuid.uuid4().hex[:16]}"
-        try:
-            binance_client.new_order(
-                symbol=symbol,
-                side=side,
-                order_type="MARKET",
-                quantity=qty,
-                new_client_order_id=client_order_id,
-            )
-        except Exception as e:
-            err_msg = str(e)
-            if "-2019" in err_msg or "Margin is insufficient" in err_msg or "insufficient" in err_msg.lower():
-                _append_activity(
-                    "error",
-                    symbol,
-                    "Entry order failed: Margin is insufficient. Check Futures wallet balance and reduce max_usdt/leverage in Rich Man settings.",
+
+        # Attempt order; if margin insufficient, retry once with reduced qty (80%)
+        order_placed = False
+        for attempt in range(2):
+            try:
+                binance_client.new_order(
+                    symbol=symbol,
+                    side=side,
+                    order_type="MARKET",
+                    quantity=qty,
+                    new_client_order_id=client_order_id if attempt == 0 else f"ap_{uuid.uuid4().hex[:16]}",
                 )
-            else:
-                _append_activity("error", symbol, f"Entry order failed: {err_msg}")
+                order_placed = True
+                break
+            except Exception as e:
+                err_msg = str(e)
+                is_margin_err = (
+                    "-2019" in err_msg
+                    or "Margin is insufficient" in err_msg
+                    or "insufficient" in err_msg.lower()
+                )
+                if is_margin_err and attempt == 0:
+                    # Retry with 80% of original qty
+                    qty = qty * 0.80
+                    if step > 0:
+                        qty = round(qty - (qty % step), prec)
+                    if (qty * current_price) < min_notional:
+                        _append_activity(
+                            "error",
+                            symbol,
+                            f"Margin insufficient even after retry. Available: {available:.2f} USDT, required margin > available.",
+                        )
+                        return
+                    _append_activity("system", symbol, f"Margin insufficient, retrying with reduced qty={qty:.4f}")
+                    continue
+                elif is_margin_err:
+                    _append_activity(
+                        "error",
+                        symbol,
+                        f"Entry order failed: Margin is insufficient (available {available:.2f} USDT). Reduce max_usdt or leverage.",
+                    )
+                else:
+                    _append_activity("error", symbol, f"Entry order failed: {err_msg}")
+                return
+        if not order_placed:
             return
         _append_activity("entry", symbol, f"{side} qty={qty} @ {current_price:.2f} SL={sl_price:.2f} TP={tp_price:.2f}")
         try:
