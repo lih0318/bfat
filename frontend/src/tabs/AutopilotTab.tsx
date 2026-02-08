@@ -350,6 +350,38 @@ export function AutopilotTab() {
                   </>
                 )}
               </div>
+              {form.entry_type === 'limit' && (
+                <table className="entry-ref-table">
+                  <thead>
+                    <tr>
+                      <th>설정</th>
+                      <th>보수적 (체결 우선)</th>
+                      <th>균형 (추천)</th>
+                      <th>공격적 (가격 우선)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>Price Filter</td>
+                      <td>0.4</td>
+                      <td><strong>0.3</strong></td>
+                      <td>0.2</td>
+                    </tr>
+                    <tr>
+                      <td>Limit Offset</td>
+                      <td>0.08</td>
+                      <td><strong>0.15</strong></td>
+                      <td>0.2</td>
+                    </tr>
+                    <tr>
+                      <td>TTL (분)</td>
+                      <td>20</td>
+                      <td><strong>15</strong></td>
+                      <td>10</td>
+                    </tr>
+                  </tbody>
+                </table>
+              )}
             </section>
             <section className="config-section">
               <h4>Loss Limit &amp; Reentry</h4>
