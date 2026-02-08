@@ -14,6 +14,7 @@ from app.models.autopilot_config import AutopilotConfig
 from app.services.binance_client import binance_client
 from app.services.exchange_info import ExchangeInfoCache
 from app.services.journal_service import append_entry as journal_append, get_entries as journal_get_entries
+from app.services.market_regime import get_market_regime
 from app.strategies.base import MarketData, MarketDataCandle, SignalResult
 from app.strategies.confluence_atr import ConfluenceATRStrategy
 from app.strategies.range_rsi import RangeRSIStrategy
@@ -211,49 +212,88 @@ def run_one_cycle() -> None:
             _append_activity("system", symbol, "Position closed (SL/TP or manual); reentry cooldown started")
             # Fetch realized PnL from Binance and write exit journal entry (with balance %)
             try:
+                # 1) Find matching entry journal record for this symbol
+                entries = journal_get_entries(500, "live")
+                last_entry = None
+                for e in entries:
+                    if e.get("type") == "entry" and e.get("symbol") == symbol:
+                        last_entry = e
+                        break
+
+                # 2) Determine startTime for income lookup (entry timestamp or fallback 24h)
+                entry_ts = None
+                if last_entry and last_entry.get("entry_ts"):
+                    entry_ts = int(last_entry["entry_ts"])
+                else:
+                    entry_ts = int((time.time() - 86400) * 1000)  # fallback: 24h ago
+
+                # 3) Sum ALL REALIZED_PNL income records since entry (handles partial fills)
                 income_list = binance_client.income_history(
-                    symbol=symbol, income_type="REALIZED_PNL", limit=10
+                    symbol=symbol,
+                    income_type="REALIZED_PNL",
+                    start_time=entry_ts,
+                    limit=100,
                 )
-                if income_list:
-                    rec = income_list[0]
-                    realized_pnl = float(rec.get("income", 0) or 0)
-                    acct = binance_client.account()
-                    total_balance = float(acct.get("totalWalletBalance", 0) or 0)
-                    balance_before_exit = total_balance - realized_pnl
-                    pnl_pct_of_balance = (
-                        (realized_pnl / balance_before_exit * 100.0)
-                        if balance_before_exit and balance_before_exit != 0
-                        else 0.0
+                realized_pnl = sum(float(rec.get("income", 0) or 0) for rec in income_list) if income_list else 0.0
+
+                # 4) Get actual exit price from userTrades API
+                exit_price_actual = None
+                try:
+                    trades = binance_client.user_trades(
+                        symbol=symbol,
+                        start_time=entry_ts,
+                        limit=100,
                     )
-                    _daily_realized_pnl += realized_pnl
-                    # Match to last entry for this symbol
-                    entries = journal_get_entries(500, "live")
-                    last_entry = None
-                    for e in entries:
-                        if e.get("type") == "entry" and e.get("symbol") == symbol:
-                            last_entry = e
-                            break
-                    exit_payload: dict[str, Any] = {
-                        "type": "exit",
-                        "symbol": symbol,
-                        "realized_pnl": round(realized_pnl, 2),
-                        "balance_before_exit": round(balance_before_exit, 2),
-                        "pnl_pct_of_balance": round(pnl_pct_of_balance, 2),
-                    }
-                    if last_entry:
-                        exit_payload["side"] = last_entry.get("side")
-                        exit_payload["entry_price"] = last_entry.get("entry_price")
-                        exit_payload["qty"] = last_entry.get("qty")
-                        exit_payload["client_order_id"] = last_entry.get("client_order_id")
-                        # Approximate exit price from realized PnL (for display)
-                        ep, q = last_entry.get("entry_price"), last_entry.get("qty")
-                        if ep is not None and q and float(q) != 0:
-                            side = last_entry.get("side", "BUY")
-                            if side == "BUY":
-                                exit_payload["exit_price"] = round(float(ep) + realized_pnl / float(q), 2)
-                            else:
-                                exit_payload["exit_price"] = round(float(ep) - realized_pnl / float(q), 2)
-                    journal_append(exit_payload)
+                    # Filter to closing (reduceOnly) trades; compute VWAP
+                    close_trades = [t for t in trades if t.get("buyer") != t.get("maker")]
+                    # More reliable: use the last few trades that are "reduce-only" by checking positionSide or realizedPnl
+                    close_trades_pnl = [t for t in trades if float(t.get("realizedPnl", 0)) != 0]
+                    if close_trades_pnl:
+                        total_qty = sum(float(t["qty"]) for t in close_trades_pnl)
+                        if total_qty > 0:
+                            exit_price_actual = round(
+                                sum(float(t["price"]) * float(t["qty"]) for t in close_trades_pnl) / total_qty,
+                                2,
+                            )
+                except Exception as te:
+                    logger.warning("userTrades lookup for exit price failed: %s", te)
+
+                # 5) Compute balance-based PnL %
+                acct = binance_client.account()
+                total_balance = float(acct.get("totalWalletBalance", 0) or 0)
+                balance_before_exit = total_balance - realized_pnl
+                pnl_pct_of_balance = (
+                    (realized_pnl / balance_before_exit * 100.0)
+                    if balance_before_exit and balance_before_exit != 0
+                    else 0.0
+                )
+                _daily_realized_pnl += realized_pnl
+
+                # 6) Build exit journal payload
+                exit_payload: dict[str, Any] = {
+                    "type": "exit",
+                    "symbol": symbol,
+                    "realized_pnl": round(realized_pnl, 2),
+                    "balance_before_exit": round(balance_before_exit, 2),
+                    "pnl_pct_of_balance": round(pnl_pct_of_balance, 2),
+                }
+                if last_entry:
+                    exit_payload["side"] = last_entry.get("side")
+                    exit_payload["entry_price"] = last_entry.get("entry_price")
+                    exit_payload["qty"] = last_entry.get("qty")
+                    exit_payload["client_order_id"] = last_entry.get("client_order_id")
+                # Use actual exit price from trades, else approximate
+                if exit_price_actual is not None:
+                    exit_payload["exit_price"] = exit_price_actual
+                elif last_entry:
+                    ep, q = last_entry.get("entry_price"), last_entry.get("qty")
+                    if ep is not None and q and float(q) != 0:
+                        side_val = last_entry.get("side", "BUY")
+                        if side_val == "BUY":
+                            exit_payload["exit_price"] = round(float(ep) + realized_pnl / float(q), 2)
+                        else:
+                            exit_payload["exit_price"] = round(float(ep) - realized_pnl / float(q), 2)
+                journal_append(exit_payload)
             except Exception as je:
                 logger.warning("Exit journal append failed: %s", je)
         if has_position_now:
@@ -300,12 +340,25 @@ def run_one_cycle() -> None:
             volume_ratio=volume_ratio,
             current_price=current_price,
         )
-        strategy = RangeRSIStrategy() if getattr(cfg, "strategy_mode", "trend") == "range" else ConfluenceATRStrategy()
+        # Resolve effective strategy mode (auto → use 1h regime)
+        raw_mode = getattr(cfg, "strategy_mode", "trend")
+        if raw_mode == "auto":
+            try:
+                regime_data = get_market_regime(symbol)
+                h1_regime = regime_data.get("1h", {}).get("regime", "unknown")
+                effective_mode = "range" if h1_regime == "ranging" else "trend"
+                _append_activity("system", symbol, f"Auto mode: 1h regime={h1_regime} → {effective_mode}")
+            except Exception as re_err:
+                logger.warning("Auto regime lookup failed: %s, defaulting to trend", re_err)
+                effective_mode = "trend"
+        else:
+            effective_mode = raw_mode
+        strategy = RangeRSIStrategy() if effective_mode == "range" else ConfluenceATRStrategy()
         signal, skip_reason = strategy.get_signal(data, cfg)
         if signal is None or signal.side == "flat":
             _append_activity("signal", symbol, f"No entry: {skip_reason}")
             return
-        mode_label = "RSI/range" if getattr(cfg, "strategy_mode", "trend") == "range" else "RSI/MACD/trend"
+        mode_label = "RSI/range" if effective_mode == "range" else "RSI/MACD/trend"
         _append_activity(
             "signal",
             symbol,
@@ -470,6 +523,7 @@ def run_one_cycle() -> None:
                 "sl": sl_price,
                 "tp": tp_price,
                 "client_order_id": client_order_id,
+                "entry_ts": int(time.time() * 1000),  # ms timestamp for exit PnL lookup
             })
         except Exception as je:
             logger.warning("Journal append failed: %s", je)

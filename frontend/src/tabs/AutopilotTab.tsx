@@ -47,7 +47,7 @@ export function AutopilotTab() {
   const [activityMode, setActivityMode] = useState<'all' | 'live'>('all')
   const formDirtyRef = useRef(false)
   const [form, setForm] = useState({
-    strategy_mode: 'trend' as 'trend' | 'range',
+    strategy_mode: 'auto' as 'auto' | 'trend' | 'range',
     rsi_oversold: 30,
     rsi_overbought: 70,
     max_usdt: 1000,
@@ -118,7 +118,7 @@ export function AutopilotTab() {
 
   const applyConfigToForm = (config: Record<string, unknown>, prev: typeof form) => ({
     ...prev,
-    strategy_mode: (config.strategy_mode === 'range' ? 'range' : 'trend') as 'trend' | 'range',
+    strategy_mode: (['auto', 'trend', 'range'].includes(config.strategy_mode) ? config.strategy_mode : 'auto') as 'auto' | 'trend' | 'range',
     rsi_oversold: Number(config.rsi_oversold ?? prev.rsi_oversold ?? 30),
     rsi_overbought: Number(config.rsi_overbought ?? prev.rsi_overbought ?? 70),
     max_usdt: Number(config.max_usdt ?? prev.max_usdt),
@@ -192,11 +192,11 @@ export function AutopilotTab() {
         {marketRegime ? (
           <>
             <div className="richman-regime-card">
-              <h3>Market regime — 1D (큰 시야)</h3>
+              <h3>Market regime — 1D (큰 시야) · {marketRegime.symbol}</h3>
               <RegimeBlock tf={marketRegime['1d']} />
             </div>
             <div className="richman-regime-card">
-              <h3>Market regime — 1h (세부)</h3>
+              <h3>Market regime — 1h (세부) · {marketRegime.symbol}</h3>
               <RegimeBlock tf={marketRegime['1h']} />
             </div>
           </>
@@ -220,14 +220,15 @@ export function AutopilotTab() {
                     value={form.strategy_mode}
                     onChange={(e) => {
                       formDirtyRef.current = true
-                      setForm((f) => ({ ...f, strategy_mode: e.target.value as 'trend' | 'range' }))
+                      setForm((f) => ({ ...f, strategy_mode: e.target.value as 'auto' | 'trend' | 'range' }))
                     }}
                   >
-                    <option value="trend">Trend (추세) — 추세 추종</option>
-                    <option value="range">Range (횡보) — RSI 평균 회귀</option>
+                    <option value="auto">Auto (1h 기준) — 자동 선택</option>
+                    <option value="trend">Trend (추세) — 추세 추종 (수동)</option>
+                    <option value="range">Range (횡보) — RSI 평균 회귀 (수동)</option>
                   </select>
                 </label>
-                {form.strategy_mode === 'range' && (
+                {(form.strategy_mode === 'range' || form.strategy_mode === 'auto') && (
                   <>
                     <label>
                       <span>RSI 과매도 (롱 진입)</span>

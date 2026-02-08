@@ -107,6 +107,27 @@ class BinanceFuturesClient:
         data = self._signed_request("GET", "/fapi/v1/income", params)
         return data if isinstance(data, list) else []
 
+    def user_trades(
+        self,
+        symbol: str,
+        start_time: Optional[int] = None,
+        end_time: Optional[int] = None,
+        limit: int = 100,
+        recv_window: int = DEFAULT_RECV_WINDOW,
+    ) -> list[dict[str, Any]]:
+        """Get account trade list for a symbol (GET /fapi/v1/userTrades)."""
+        params: dict[str, Any] = {
+            "symbol": symbol,
+            "limit": limit,
+            "recvWindow": recv_window,
+        }
+        if start_time is not None:
+            params["startTime"] = start_time
+        if end_time is not None:
+            params["endTime"] = end_time
+        data = self._signed_request("GET", "/fapi/v1/userTrades", params)
+        return data if isinstance(data, list) else []
+
     # --- Market ---
     def klines(
         self,

@@ -11,8 +11,8 @@ class AutopilotConfig(BaseModel):
     max_usdt: float = Field(1000.0, description="Max USDT for Autopilot to use")
     max_leverage: int = Field(5, ge=1, le=125, description="Max leverage")
     daily_loss_limit_usdt: float = Field(0.0, description="Daily loss limit USDT (0=disabled)")
-    # Strategy mode: trend = Confluence+ATR, range = RSI mean reversion (sideways market)
-    strategy_mode: Literal["trend", "range"] = Field("trend", description="trend=follow trend, range=mean reversion in sideways")
+    # Strategy mode: auto = 1h regime decides, trend = Confluence+ATR, range = RSI mean reversion
+    strategy_mode: Literal["auto", "trend", "range"] = Field("auto", description="auto=1h regime decides, trend=follow trend, range=mean reversion")
     # Range mode: RSI oversold -> long, RSI overbought -> short
     rsi_oversold: float = Field(30.0, ge=0, le=100, description="Range mode: long when RSI <= this")
     rsi_overbought: float = Field(70.0, ge=0, le=100, description="Range mode: short when RSI >= this")
