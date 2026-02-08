@@ -236,14 +236,14 @@ class BinanceFuturesClient:
             "symbol": symbol,
             "side": side,
             "type": order_type,
-            "triggerPrice": trigger_price,
+            "triggerPrice": str(trigger_price),
             "reduceOnly": "true" if reduce_only else "false",
             "workingType": working_type,
             "recvWindow": recv_window,
             "timestamp": self._timestamp_ms(),
         }
         if quantity is not None:
-            params["quantity"] = quantity
+            params["quantity"] = str(quantity)
         if client_algo_id is not None:
             params["clientAlgoId"] = client_algo_id
         return self._signed_request("POST", "/fapi/v1/algoOrder", params)
