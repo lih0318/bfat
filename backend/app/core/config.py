@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     fapi_base_url: str = "https://testnet.binancefuture.com"
     ws_base_url: Optional[str] = None  # derived from fapi_base_url if not set
 
+    # App authentication (simple login)
+    app_username: str = ""
+    app_password: str = ""
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
     @property

@@ -6,6 +6,7 @@ type TabId = 'wallet' | 'charts' | 'positions' | 'autopilot' | 'journal'
 interface LayoutProps {
   activeTab: TabId
   onTab: (tab: TabId) => void
+  onLogout?: () => void
   children: ReactNode
 }
 
@@ -17,11 +18,18 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'journal', label: 'Journal' },
 ]
 
-export function Layout({ activeTab, onTab, children }: LayoutProps) {
+export function Layout({ activeTab, onTab, onLogout, children }: LayoutProps) {
   return (
     <div className="layout">
       <header className="layout-header">
-        <h1 className="layout-title">Binance Futures Auto Trader</h1>
+        <div className="layout-header-top">
+          <h1 className="layout-title">Binance Futures Auto Trader</h1>
+          {onLogout && (
+            <button type="button" className="layout-logout-btn" onClick={onLogout} title="Log out">
+              Logout
+            </button>
+          )}
+        </div>
         <nav className="layout-tabs">
           {TABS.map(({ id, label }) => (
             <button

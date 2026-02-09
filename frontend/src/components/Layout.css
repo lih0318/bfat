@@ -10,12 +10,18 @@
   padding: 1rem 1.5rem;
   border-bottom: 1px solid var(--border);
   display: flex;
-  align-items: center;
-  gap: 2rem;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 0.75rem;
   background: var(--bg-card);
   backdrop-filter: blur(12px);
   box-shadow: var(--shadow);
+}
+
+.layout-header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
 }
 
 .layout-title {
@@ -24,6 +30,24 @@
   margin: 0;
   letter-spacing: -0.02em;
   color: var(--accent);
+}
+
+.layout-logout-btn {
+  padding: 0.4rem 0.85rem;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s, border-color 0.2s;
+}
+
+.layout-logout-btn:hover {
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--negative);
+  border-color: rgba(239, 68, 68, 0.3);
 }
 
 .layout-tabs {
