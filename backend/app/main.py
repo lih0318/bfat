@@ -29,7 +29,7 @@ app.add_middleware(
 
 # ── Auth middleware ──
 # Paths that don't require authentication
-_PUBLIC_PATHS = {"/api/health", "/api/auth/login"}
+_PUBLIC_PATHS = {"/api/health", "/api/auth/login", "/api/auth/check"}
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
