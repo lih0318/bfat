@@ -152,7 +152,9 @@ export function PositionsTab() {
                   const pnl = parseFloat(row.unrealizedProfit)
                   const amt = Math.abs(parseFloat(row.positionAmt))
                   const notional = Number(row.entryPrice) * amt
-                  const pnlPct = notional !== 0 ? (pnl / notional) * 100 : 0
+                  const lev = Number(row.leverage) || 1
+                  const margin = lev > 0 ? notional / lev : notional
+                  const pnlPct = margin > 0 ? (pnl / margin) * 100 : 0
                   return (
                     <tr key={row.symbol}>
                       <td>{row.symbol}</td>
@@ -179,7 +181,13 @@ export function PositionsTab() {
                     (s, row) => s + Number(row.entryPrice) * Math.abs(parseFloat(row.positionAmt)),
                     0
                   )
-                  const totalPct = totalNotional !== 0 ? (totalPnl / totalNotional) * 100 : 0
+                  const totalMargin = positions.reduce((s, row) => {
+                    const amt = Math.abs(parseFloat(row.positionAmt))
+                    const notional = Number(row.entryPrice) * amt
+                    const lev = Number(row.leverage) || 1
+                    return s + (lev > 0 ? notional / lev : notional)
+                  }, 0)
+                  const totalPct = totalMargin > 0 ? (totalPnl / totalMargin) * 100 : 0
                   return (
                     <tr className="positions-total-row">
                       <td colSpan={5}>Total</td>
