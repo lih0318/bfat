@@ -181,11 +181,19 @@ def start_autopilot() -> dict[str, Any]:
 
 
 def stop_autopilot() -> dict[str, Any]:
-    global _autopilot_running, _autopilot_status
+    global _autopilot_running, _autopilot_status, _pending_limit_orders
     _autopilot_running = False
     _autopilot_status = {"running": False, "reason": "Stopped by user"}
     _stop_loop_thread()
     cfg = get_config()
+    # Cancel any pending limit orders on Binance
+    for sym in list(_pending_limit_orders.keys()):
+        try:
+            binance_client.cancel_all_open_orders(symbol=sym)
+            _append_activity("system", sym, "Pending limit order cancelled (autopilot stopped)")
+        except Exception as e:
+            logger.warning("Cancel pending limit on stop: %s", e)
+    _pending_limit_orders.clear()
     _append_activity("system", cfg.symbol, "Rich Man stopped")
     return {"ok": True, "message": "Stopped"}
 
@@ -289,9 +297,6 @@ def run_one_cycle() -> None:
         return
     if not _in_trading_hours(cfg.trading_hours_utc):
         return
-
-    # ── Manage pending limit orders ──────────────────────────────
-    _check_pending_limit_orders(cfg)
 
     try:
         lp = _get_live_position(symbol)
@@ -633,21 +638,60 @@ def run_one_cycle() -> None:
                 else:
                     _append_activity("error", symbol, f"Limit order failed: {err_msg}")
                 return
-            # Register pending limit order (SL/TP will be set after fill in _check_pending_limit_orders)
-            _pending_limit_orders[symbol] = {
-                "client_order_id": client_order_id,
-                "placed_at": time.time(),
-                "side": side,
-                "qty": qty,
-                "sl": sl_price,
-                "tp": tp_price,
-                "limit_price": limit_price,
-                "signal_side": signal.side,
-            }
             _append_activity(
                 "entry", symbol,
                 f"LIMIT {side} qty={qty} @ {limit_price:.2f} (current={current_price:.2f}) SL={sl_price:.2f} TP={tp_price:.2f} TTL={getattr(cfg, 'limit_ttl_minutes', 15)}min",
             )
+            # Check if limit order was filled immediately (taker fill)
+            import time as _time_mod
+            _time_mod.sleep(1)  # brief pause to let Binance process
+            try:
+                open_orders = binance_client.get_open_orders(symbol=symbol)
+                order_still_open = any(o.get("clientOrderId") == client_order_id for o in open_orders)
+            except Exception:
+                order_still_open = True  # assume still open on error
+            if not order_still_open:
+                # Filled immediately — set SL/TP now
+                _append_activity("system", symbol, f"Limit order filled immediately @ {limit_price}. Setting SL/TP...")
+                stop_side = "SELL" if signal.side == "long" else "BUY"
+                try:
+                    binance_client.new_algo_order(
+                        symbol=symbol, side=stop_side, order_type="STOP_MARKET",
+                        trigger_price=sl_price, quantity=qty, reduce_only=True,
+                        client_algo_id=f"{client_order_id}_sl",
+                    )
+                except Exception as e:
+                    _append_activity("error", symbol, f"SL order failed: {e}")
+                try:
+                    binance_client.new_algo_order(
+                        symbol=symbol, side=stop_side, order_type="TAKE_PROFIT_MARKET",
+                        trigger_price=tp_price, quantity=qty, reduce_only=True,
+                        client_algo_id=f"{client_order_id}_tp",
+                    )
+                except Exception as e:
+                    _append_activity("error", symbol, f"TP order failed: {e}")
+                try:
+                    journal_append({
+                        "type": "entry", "symbol": symbol, "side": side,
+                        "entry_price": limit_price, "qty": qty,
+                        "sl": sl_price, "tp": tp_price,
+                        "client_order_id": client_order_id,
+                        "entry_ts": int(time.time() * 1000),
+                    })
+                except Exception as je:
+                    logger.warning("Journal append after immediate fill: %s", je)
+            else:
+                # Not filled yet — register as pending for TTL management
+                _pending_limit_orders[symbol] = {
+                    "client_order_id": client_order_id,
+                    "placed_at": time.time(),
+                    "side": side,
+                    "qty": qty,
+                    "sl": sl_price,
+                    "tp": tp_price,
+                    "limit_price": limit_price,
+                    "signal_side": signal.side,
+                }
         else:
             # ── MARKET order (fallback) ──────────────────────────
             order_placed = False
@@ -746,6 +790,13 @@ def _autopilot_loop() -> None:
     global _stop_loop
     _stop_loop = False
     while not _stop_loop:
+        # Always check pending limit orders (TTL, fill detection) even if autopilot is stopped
+        try:
+            if _pending_limit_orders:
+                cfg = get_config()
+                _check_pending_limit_orders(cfg)
+        except Exception as e:
+            logger.warning("Pending limit check in loop: %s", e)
         try:
             run_one_cycle()
         except Exception as e:

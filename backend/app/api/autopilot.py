@@ -35,6 +35,10 @@ class AutopilotConfigUpdate(BaseModel):
     flip_fee_bps: float | None = None
     flip_slippage_bps: float | None = None
     flip_min_edge_ratio: float | None = None
+    entry_type: str | None = None  # "limit" | "market"
+    price_filter_atr_mult: float | None = None
+    limit_offset_atr_mult: float | None = None
+    limit_ttl_minutes: int | None = None
     trading_hours_utc: str | None = None
 
 
