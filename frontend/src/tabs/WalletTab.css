@@ -102,6 +102,48 @@
   cursor: not-allowed;
 }
 
+.wallet-chart-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.wallet-range-btn {
+  padding: 0.35rem 0.75rem;
+  font-size: 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: border-color 0.2s, color 0.2s;
+}
+
+.wallet-range-btn:hover {
+  border-color: rgba(212, 168, 83, 0.4);
+  color: var(--accent);
+}
+
+.wallet-range-btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.wallet-chart-wrap {
+  width: 100%;
+  min-height: 260px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.wallet-chart-note {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin: 0.5rem 0 0 0;
+}
+
 @media (max-width: 768px) {
   .wallet-cards {
     grid-template-columns: 1fr;

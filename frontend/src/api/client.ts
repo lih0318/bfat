@@ -76,6 +76,10 @@ export const api = {
   account: {
     balance: () => fetchApi<Array<Record<string, unknown>>>('/api/account/balance'),
     account: () => fetchApi<Record<string, unknown>>('/api/account/account'),
+    balanceHistory: (period: '1d' | '1w') =>
+      fetchApi<{ points: Array<{ ts: string; ts_epoch: number; balance: number }> }>(
+        `/api/account/balance-history?period=${period}`
+      ),
   },
   klines: (params: { symbol: string; interval?: string; limit?: number }) => {
     const sp = new URLSearchParams()

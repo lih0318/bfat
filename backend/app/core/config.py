@@ -50,5 +50,11 @@ class Settings(BaseSettings):
         self.config_dir.mkdir(parents=True, exist_ok=True)
         return p
 
+    @property
+    def balance_history_path(self) -> Path:
+        p = self.config_dir / "balance_history.json"
+        self.config_dir.mkdir(parents=True, exist_ok=True)
+        return p
+
 
 settings = Settings()
