@@ -14,15 +14,20 @@ interface PositionRow {
   tpPrice?: string
 }
 
-/** Build map: symbol -> { sl, tp, side } from journal (most recent entry per symbol). */
-function buildSlTpFromJournal(entries: JournalEntry[]): Record<string, { sl?: number; tp?: number; side?: string }> {
-  const bySymbol: Record<string, { sl?: number; tp?: number; side?: string }> = {}
+/** Build map: symbol -> { sl, tp, side, entry_price } from journal (most recent entry per symbol). */
+function buildSlTpFromJournal(entries: JournalEntry[]): Record<string, { sl?: number; tp?: number; side?: string; entry_price?: number }> {
+  const bySymbol: Record<string, { sl?: number; tp?: number; side?: string; entry_price?: number }> = {}
   for (const e of entries) {
     if (e.type !== 'entry' || !e.symbol) continue
     if (e.sl == null && e.tp == null) continue
-    // Always overwrite — entries are newest-first, so the last one written wins as the most recent
+    // First match wins (entries are newest-first)
     if (!bySymbol[e.symbol]) {
-      bySymbol[e.symbol] = { sl: e.sl, tp: e.tp, side: e.side }
+      bySymbol[e.symbol] = {
+        sl: e.sl,
+        tp: e.tp,
+        side: e.side,
+        entry_price: (e as Record<string, unknown>).entry_price as number | undefined,
+      }
     }
   }
   return bySymbol
@@ -30,7 +35,7 @@ function buildSlTpFromJournal(entries: JournalEntry[]): Record<string, { sl?: nu
 
 export function PositionsTab() {
   const [positions, setPositions] = useState<PositionRow[]>([])
-  const [journalSlTpBySymbol, setJournalSlTpBySymbol] = useState<Record<string, { sl?: number; tp?: number; side?: string }>>({})
+  const [journalSlTpBySymbol, setJournalSlTpBySymbol] = useState<Record<string, { sl?: number; tp?: number; side?: string; entry_price?: number }>>({})
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -75,16 +80,29 @@ export function PositionsTab() {
     }
   }, [])
 
-  const getSlTp = (symbol: string, positionSide: string): { sl?: string; tp?: string } => {
+  const getSlTp = (symbol: string, positionSide: string, entryPriceStr: string): { sl?: string; tp?: string } => {
     const j = journalSlTpBySymbol[symbol]
     if (!j) return {}
     let sl = j.sl
     let tp = j.tp
-    // Sanity check: for Long, SL should be below TP; for Short, SL should be above TP.
-    // If journal values seem swapped relative to position side, correct the display.
-    if (sl != null && tp != null) {
+    const entryPrice = Number(entryPriceStr) || j.entry_price || 0
+    // Use entry price to determine which value is SL vs TP.
+    // Long: SL < entry < TP.  Short: TP < entry < SL.
+    if (sl != null && tp != null && entryPrice > 0) {
+      const lower = Math.min(sl, tp)
+      const upper = Math.max(sl, tp)
+      if (positionSide === 'Long') {
+        // SL = the one below entry, TP = the one above entry
+        sl = lower
+        tp = upper
+      } else {
+        // Short: SL = the one above entry, TP = the one below entry
+        sl = upper
+        tp = lower
+      }
+    } else if (sl != null && tp != null) {
+      // Fallback: use relative comparison
       if (positionSide === 'Long' && sl > tp) {
-        // Swapped — sl is actually tp and vice versa
         ;[sl, tp] = [tp, sl]
       } else if (positionSide === 'Short' && sl < tp) {
         ;[sl, tp] = [tp, sl]
@@ -130,7 +148,7 @@ export function PositionsTab() {
               </thead>
               <tbody>
                 {positions.map((row) => {
-                  const { sl, tp } = getSlTp(row.symbol, row.side)
+                  const { sl, tp } = getSlTp(row.symbol, row.side, row.entryPrice)
                   const pnl = parseFloat(row.unrealizedProfit)
                   const amt = Math.abs(parseFloat(row.positionAmt))
                   const notional = Number(row.entryPrice) * amt
