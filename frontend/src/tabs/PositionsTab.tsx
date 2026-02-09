@@ -14,15 +14,23 @@ interface PositionRow {
   tpPrice?: string
 }
 
-/** Build map: symbol -> { sl, tp, side, entry_price } from journal (most recent entry per symbol). */
+/** Normalize journal side to Long | Short for map key. */
+function normalizeJournalSide(side: string | undefined): 'Long' | 'Short' {
+  const s = (side ?? '').toString().toLowerCase()
+  if (s === 'buy' || s === 'long') return 'Long'
+  return 'Short'
+}
+
+/** Build map: symbol_side -> { sl, tp, entry_price } from journal (most recent entry per symbol+side). */
 function buildSlTpFromJournal(entries: JournalEntry[]): Record<string, { sl?: number; tp?: number; side?: string; entry_price?: number }> {
-  const bySymbol: Record<string, { sl?: number; tp?: number; side?: string; entry_price?: number }> = {}
+  const byKey: Record<string, { sl?: number; tp?: number; side?: string; entry_price?: number }> = {}
   for (const e of entries) {
     if (e.type !== 'entry' || !e.symbol) continue
     if (e.sl == null && e.tp == null) continue
-    // First match wins (entries are newest-first)
-    if (!bySymbol[e.symbol]) {
-      bySymbol[e.symbol] = {
+    const normalizedSide = normalizeJournalSide(e.side)
+    const key = `${e.symbol}_${normalizedSide}`
+    if (!byKey[key]) {
+      byKey[key] = {
         sl: e.sl,
         tp: e.tp,
         side: e.side,
@@ -30,7 +38,7 @@ function buildSlTpFromJournal(entries: JournalEntry[]): Record<string, { sl?: nu
       }
     }
   }
-  return bySymbol
+  return byKey
 }
 
 export function PositionsTab() {
@@ -81,7 +89,8 @@ export function PositionsTab() {
   }, [])
 
   const getSlTp = (symbol: string, positionSide: string, entryPriceStr: string): { sl?: string; tp?: string } => {
-    const j = journalSlTpBySymbol[symbol]
+    const key = `${symbol}_${positionSide}`
+    const j = journalSlTpBySymbol[key]
     if (!j) return {}
     let sl = j.sl
     let tp = j.tp

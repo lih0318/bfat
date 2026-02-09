@@ -59,9 +59,20 @@ def append_entry(entry: dict[str, Any]) -> None:
     logger.info("Journal appended: %s %s", entry.get("type"), entry.get("symbol"))
 
 
-def get_entries(limit: int = 200, mode: str = "all") -> list[dict[str, Any]]:
-    """Return most recent entries (newest first). mode: all | live."""
+def get_entries(limit: int = 200, mode: str = "all", type_filter: str | None = None) -> list[dict[str, Any]]:
+    """Return most recent entries (newest first). mode: all | live. type_filter: optional entry|exit|paper_entry|paper_exit."""
     entries = _load()
     if mode == "live":
         entries = [e for e in entries if e.get("type") in ("entry", "exit")]
+    if type_filter and type_filter in ("entry", "exit", "paper_entry", "paper_exit"):
+        entries = [e for e in entries if e.get("type") == type_filter]
     return list(reversed(entries[-limit:]))  # newest first
+
+
+def clear_entries() -> None:
+    """Clear all journal entries (file and in-memory)."""
+    global _JOURNAL, _LOADED
+    _JOURNAL = []
+    _LOADED = True
+    _save(_JOURNAL)
+    logger.info("Journal cleared")

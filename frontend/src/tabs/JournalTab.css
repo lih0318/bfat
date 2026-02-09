@@ -56,6 +56,31 @@
   font-weight: 600;
 }
 
+.journal-actions {
+  margin-top: 0.75rem;
+}
+
+.journal-clear-btn {
+  padding: 0.4rem 0.9rem;
+  font-size: 0.85rem;
+  border: 1px solid var(--negative);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--negative);
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.journal-clear-btn:hover:not(:disabled) {
+  opacity: 0.9;
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.journal-clear-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .journal-error {
   color: var(--negative);
   margin: 0;

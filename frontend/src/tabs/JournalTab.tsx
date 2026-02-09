@@ -1,24 +1,45 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { api, type JournalEntry } from '../api/client'
 import './JournalTab.css'
 
 type JournalMode = 'all' | 'live'
+type JournalTypeFilter = 'all' | 'entry' | 'exit' | 'paper_entry' | 'paper_exit'
 
 export function JournalTab() {
   const [entries, setEntries] = useState<JournalEntry[]>([])
   const [mode, setMode] = useState<JournalMode>('all')
+  const [typeFilter, setTypeFilter] = useState<JournalTypeFilter>('all')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [clearing, setClearing] = useState(false)
 
-  useEffect(() => {
+  const loadEntries = useCallback(() => {
     setLoading(true)
     setError(null)
     api.journal
-      .list(200, mode)
+      .list(200, mode, typeFilter === 'all' ? undefined : typeFilter)
       .then(setEntries)
       .catch((e) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false))
-  }, [mode])
+  }, [mode, typeFilter])
+
+  useEffect(() => {
+    loadEntries()
+  }, [loadEntries])
+
+  const handleClearJournal = async () => {
+    if (!window.confirm('정말 모든 저널 데이터를 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.')) return
+    setClearing(true)
+    setError(null)
+    try {
+      await api.journal.clear()
+      await loadEntries()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setClearing(false)
+    }
+  }
 
   const formatTs = (ts: string) => {
     try {
@@ -56,6 +77,27 @@ export function JournalTab() {
               {m === 'all' ? 'All' : 'Live only'}
             </button>
           ))}
+          <span className="journal-filter-label">Type:</span>
+          {(['all', 'entry', 'exit', 'paper_entry', 'paper_exit'] as const).map((t) => (
+            <button
+              key={t}
+              type="button"
+              className={`journal-filter-btn ${typeFilter === t ? 'active' : ''}`}
+              onClick={() => setTypeFilter(t)}
+            >
+              {t === 'all' ? 'All' : t === 'entry' ? 'Entry' : t === 'exit' ? 'Exit' : t === 'paper_entry' ? 'Paper Entry' : 'Paper Exit'}
+            </button>
+          ))}
+        </div>
+        <div className="journal-actions">
+          <button
+            type="button"
+            className="journal-clear-btn"
+            onClick={handleClearJournal}
+            disabled={clearing || loading}
+          >
+            {clearing ? 'Clearing...' : 'Clear Journal Data'}
+          </button>
         </div>
       </header>
       {error && <p className="journal-error">{error}</p>}

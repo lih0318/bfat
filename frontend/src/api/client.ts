@@ -132,13 +132,16 @@ export const api = {
     },
   },
   journal: {
-    list: (limit?: number, mode?: 'all' | 'live') => {
+    list: (limit?: number, mode?: 'all' | 'live', type?: string) => {
       const p = new URLSearchParams()
       if (limit != null) p.set('limit', String(limit))
       if (mode && mode !== 'all') p.set('mode', mode)
+      if (type && type !== 'all') p.set('type', type)
       const q = p.toString()
       return fetchApi<Array<JournalEntry>>(`/api/journal${q ? `?${q}` : ''}`)
     },
+    clear: () =>
+      fetchApi<{ ok: boolean }>('/api/journal', { method: 'DELETE' }),
   },
   paper: {
     status: () =>
