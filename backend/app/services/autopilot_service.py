@@ -136,14 +136,58 @@ def _has_position(symbol: str) -> bool:
 
 def _set_sl_tp(
     symbol: str, stop_side: str, sl_price: float, tp_price: float,
-    qty: float, client_order_id: str,
+    qty: float, client_order_id: str, entry_price: float = 0.0,
 ) -> None:
-    """Set SL and TP for a position. Tries Algo Order first, falls back to regular order."""
+    """Set SL and TP for a position. Tries Algo Order first, falls back to regular order.
+    stop_side='SELL' means we have a Long position; stop_side='BUY' means Short.
+    """
     from app.services.exchange_info import ExchangeInfoCache
     # Ensure values are properly rounded
     sl_rounded = ExchangeInfoCache.round_price(symbol, sl_price)
     tp_rounded = ExchangeInfoCache.round_price(symbol, tp_price)
     qty_rounded = ExchangeInfoCache.round_quantity(symbol, qty)
+
+    # ── Sanity check: SL/TP must make sense for the position direction ──
+    # Long (stop_side=SELL): SL must be below entry, TP must be above entry
+    # Short (stop_side=BUY):  SL must be above entry, TP must be below entry
+    ref_price = entry_price if entry_price > 0 else 0.0
+    if ref_price > 0:
+        if stop_side == "SELL":  # Long position
+            if sl_rounded >= ref_price:
+                logger.error(
+                    "SL SANITY FAIL for %s Long: SL=%s >= entry=%s — swapping SL/TP",
+                    symbol, sl_rounded, ref_price,
+                )
+                _append_activity("error", symbol, f"SL sanity fail: Long SL={sl_rounded} >= entry={ref_price}. Auto-swapping SL↔TP.")
+                sl_rounded, tp_rounded = tp_rounded, sl_rounded
+            if tp_rounded <= ref_price:
+                logger.error(
+                    "TP SANITY FAIL for %s Long: TP=%s <= entry=%s — skipping SL/TP",
+                    symbol, tp_rounded, ref_price,
+                )
+                _append_activity("error", symbol, f"TP sanity fail: Long TP={tp_rounded} <= entry={ref_price}. Skipping SL/TP.")
+                return
+        else:  # Short position (stop_side=BUY)
+            if sl_rounded <= ref_price:
+                logger.error(
+                    "SL SANITY FAIL for %s Short: SL=%s <= entry=%s — swapping SL/TP",
+                    symbol, sl_rounded, ref_price,
+                )
+                _append_activity("error", symbol, f"SL sanity fail: Short SL={sl_rounded} <= entry={ref_price}. Auto-swapping SL↔TP.")
+                sl_rounded, tp_rounded = tp_rounded, sl_rounded
+            if tp_rounded >= ref_price:
+                logger.error(
+                    "TP SANITY FAIL for %s Short: TP=%s >= entry=%s — skipping SL/TP",
+                    symbol, tp_rounded, ref_price,
+                )
+                _append_activity("error", symbol, f"TP sanity fail: Short TP={tp_rounded} >= entry={ref_price}. Skipping SL/TP.")
+                return
+
+    pos_label = "Long" if stop_side == "SELL" else "Short"
+    logger.info(
+        "Setting SL/TP for %s %s: entry=%s SL=%s TP=%s qty=%s",
+        symbol, pos_label, ref_price, sl_rounded, tp_rounded, qty_rounded,
+    )
 
     # ── SL ──
     sl_ok = False
@@ -190,11 +234,11 @@ def _set_sl_tp(
             _append_activity("error", symbol, f"TP order failed (algo+regular): {e2}")
 
     if sl_ok and tp_ok:
-        _append_activity("system", symbol, f"SL={sl_rounded} TP={tp_rounded} set OK")
+        _append_activity("system", symbol, f"SL={sl_rounded} TP={tp_rounded} set OK (entry={ref_price}, {pos_label})")
     elif sl_ok:
-        _append_activity("system", symbol, f"SL={sl_rounded} set OK, TP failed")
+        _append_activity("system", symbol, f"SL={sl_rounded} set OK, TP failed (entry={ref_price}, {pos_label})")
     elif tp_ok:
-        _append_activity("system", symbol, f"TP={tp_rounded} set OK, SL failed")
+        _append_activity("system", symbol, f"TP={tp_rounded} set OK, SL failed (entry={ref_price}, {pos_label})")
 
 
 def _get_live_position(symbol: str) -> dict[str, Any] | None:
@@ -289,7 +333,8 @@ def _check_pending_limit_orders(cfg: AutopilotConfig) -> None:
                     stop_side = "SELL" if info["signal_side"] == "long" else "BUY"
                     sl_price = info["sl"]
                     tp_price = info["tp"]
-                    _set_sl_tp(sym, stop_side, sl_price, tp_price, info["qty"], info["client_order_id"])
+                    fill_price = pos["entry_price"]  # actual fill price from Binance
+                    _set_sl_tp(sym, stop_side, sl_price, tp_price, info["qty"], info["client_order_id"], entry_price=fill_price)
                     # Journal entry
                     try:
                         journal_append({
@@ -697,10 +742,10 @@ def run_one_cycle() -> None:
             except Exception:
                 order_still_open = True  # assume still open on error
             if not order_still_open:
-                # Filled immediately — set SL/TP now
+                # Filled immediately — get actual fill price from position
                 _append_activity("system", symbol, f"Limit order filled immediately @ {limit_price}. Setting SL/TP...")
                 stop_side = "SELL" if signal.side == "long" else "BUY"
-                _set_sl_tp(symbol, stop_side, sl_price, tp_price, qty, client_order_id)
+                _set_sl_tp(symbol, stop_side, sl_price, tp_price, qty, client_order_id, entry_price=limit_price)
                 try:
                     journal_append({
                         "type": "entry", "symbol": symbol, "side": side,
@@ -766,7 +811,14 @@ def run_one_cycle() -> None:
                     return
             if not order_placed:
                 return
-            _append_activity("entry", symbol, f"MARKET {side} qty={qty} @ {current_price:.2f} SL={sl_price:.2f} TP={tp_price:.2f}")
+            # Market order fills at current_price, but signal SL/TP were based on signal.entry_price.
+            # Recalculate SL/TP relative to current_price (actual fill price) for correctness.
+            atr_offset = signal.entry_price - current_price  # how far signal entry was from market
+            market_sl = sl_price - atr_offset  # shift SL by the same offset
+            market_tp = tp_price - atr_offset  # shift TP by the same offset
+            market_sl = ExchangeInfoCache.round_price(symbol, market_sl)
+            market_tp = ExchangeInfoCache.round_price(symbol, market_tp)
+            _append_activity("entry", symbol, f"MARKET {side} qty={qty} @ {current_price:.2f} SL={market_sl:.2f} TP={market_tp:.2f}")
             try:
                 journal_append({
                     "type": "entry",
@@ -774,15 +826,15 @@ def run_one_cycle() -> None:
                     "side": side,
                     "entry_price": current_price,
                     "qty": qty,
-                    "sl": sl_price,
-                    "tp": tp_price,
+                    "sl": market_sl,
+                    "tp": market_tp,
                     "client_order_id": client_order_id,
                     "entry_ts": int(time.time() * 1000),
                 })
             except Exception as je:
                 logger.warning("Journal append failed: %s", je)
             stop_side = "SELL" if signal.side == "long" else "BUY"
-            _set_sl_tp(symbol, stop_side, sl_price, tp_price, qty, client_order_id)
+            _set_sl_tp(symbol, stop_side, market_sl, market_tp, qty, client_order_id, entry_price=current_price)
     except Exception as e:
         logger.exception("Autopilot cycle error: %s", e)
         _append_activity("error", symbol, str(e))
