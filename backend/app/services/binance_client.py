@@ -256,9 +256,51 @@ class BinanceFuturesClient:
         if client_algo_id is not None:
             params["clientAlgoId"] = client_algo_id
         result = self._signed_request("POST", "/fapi/v1/algoOrder", params)
-        # Validate response: Binance may return HTTP 200 with error in body
-        if isinstance(result, dict) and result.get("code") and int(result["code"]) < 0:
-            raise RuntimeError(f"Algo order rejected: code={result.get('code')} msg={result.get('msg')}")
+        # Validate: success has algoId, error has negative code
+        if isinstance(result, dict):
+            if result.get("algoId"):
+                return result  # Success
+            if result.get("code") and int(result["code"]) < 0:
+                raise RuntimeError(f"Algo order rejected: code={result.get('code')} msg={result.get('msg')}")
+        logger.warning("Algo order (qty) unexpected response for %s: %s", symbol, result)
+        return result
+
+    def new_algo_order_close_position(
+        self,
+        symbol: str,
+        side: str,
+        order_type: str,
+        trigger_price: float,
+        client_algo_id: Optional[str] = None,
+        working_type: str = "CONTRACT_PRICE",
+        recv_window: int = DEFAULT_RECV_WINDOW,
+    ) -> dict[str, Any]:
+        """
+        Place STOP_MARKET or TAKE_PROFIT_MARKET via Algo Order API using closePosition=true.
+        This closes the entire position without specifying quantity (avoids rounding issues).
+        Cannot be used with quantity or reduceOnly.
+        """
+        params: dict[str, Any] = {
+            "algoType": "CONDITIONAL",
+            "symbol": symbol,
+            "side": side,
+            "type": order_type,
+            "triggerPrice": self._format_decimal(trigger_price),
+            "closePosition": "true",
+            "workingType": working_type,
+            "recvWindow": recv_window,
+            "timestamp": self._timestamp_ms(),
+        }
+        if client_algo_id is not None:
+            params["clientAlgoId"] = client_algo_id
+        result = self._signed_request("POST", "/fapi/v1/algoOrder", params)
+        # Validate: success has algoId, error has negative code
+        if isinstance(result, dict):
+            if result.get("algoId"):
+                return result  # Success
+            if result.get("code") and int(result["code"]) < 0:
+                raise RuntimeError(f"Algo order rejected: code={result.get('code')} msg={result.get('msg')}")
+        logger.warning("Algo order unexpected response for %s: %s", symbol, result)
         return result
 
     def new_order(

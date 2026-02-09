@@ -3,9 +3,35 @@
  */
 const BASE = (import.meta.env.VITE_API_BASE_URL as string) || ''
 
+// ── Auth token management ──
+const TOKEN_KEY = 'bfat_auth_token'
+
+export function getAuthToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY)
+}
+
+export function setAuthToken(token: string): void {
+  localStorage.setItem(TOKEN_KEY, token)
+}
+
+export function clearAuthToken(): void {
+  localStorage.removeItem(TOKEN_KEY)
+}
+
 async function fetchApi<T>(path: string, init?: RequestInit): Promise<T> {
   const url = path.startsWith('http') ? path : `${BASE}${path}`
-  const res = await fetch(url, { ...init, credentials: 'omit' })
+  const token = getAuthToken()
+  const headers = new Headers(init?.headers ?? {})
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`)
+  }
+  const res = await fetch(url, { ...init, headers, credentials: 'omit' })
+  if (res.status === 401) {
+    // Token expired or invalid — clear it so login screen shows
+    clearAuthToken()
+    window.dispatchEvent(new Event('auth-expired'))
+    throw new Error('Session expired. Please log in again.')
+  }
   if (!res.ok) {
     const text = await res.text()
     throw new Error(text || `HTTP ${res.status}`)
@@ -13,8 +39,33 @@ async function fetchApi<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
+export interface RegimeTf {
+  timeframe: string
+  adx: number | null
+  regime: string
+  trend_direction: string
+}
+
+export interface MarketRegimeResponse {
+  symbol: string
+  '1d': RegimeTf
+  '1h': RegimeTf
+}
+
 export const api = {
   health: () => fetchApi<{ status: string }>('/api/health'),
+  auth: {
+    login: (username: string, password: string) =>
+      fetchApi<{ ok: boolean; token?: string; message?: string }>('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      }),
+    check: () =>
+      fetchApi<{ ok: boolean; authenticated: boolean }>('/api/auth/check'),
+    logout: () =>
+      fetchApi<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
+  },
   account: {
     balance: () => fetchApi<Array<Record<string, unknown>>>('/api/account/balance'),
     account: () => fetchApi<Record<string, unknown>>('/api/account/account'),
@@ -70,13 +121,7 @@ export const api = {
     },
     marketRegime: (symbol?: string) => {
       const q = symbol != null && symbol !== '' ? `?symbol=${encodeURIComponent(symbol)}` : ''
-      return fetchApi<{
-        symbol: string
-        timeframe: string
-        adx: number | null
-        regime: string
-        trend_direction: string
-      }>(`/api/autopilot/market-regime${q}`)
+      return fetchApi<MarketRegimeResponse>(`/api/autopilot/market-regime${q}`)
     },
   },
   journal: {

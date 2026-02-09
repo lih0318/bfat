@@ -138,107 +138,84 @@ def _set_sl_tp(
     symbol: str, stop_side: str, sl_price: float, tp_price: float,
     qty: float, client_order_id: str, entry_price: float = 0.0,
 ) -> None:
-    """Set SL and TP for a position. Tries Algo Order first, falls back to regular order.
+    """Set SL and TP for a position using closePosition=true (close entire position).
     stop_side='SELL' means we have a Long position; stop_side='BUY' means Short.
+    Strategy: Algo Order (closePosition) → Algo Order (quantity) → retry once.
     """
     from app.services.exchange_info import ExchangeInfoCache
-    # Ensure values are properly rounded
     sl_rounded = ExchangeInfoCache.round_price(symbol, sl_price)
     tp_rounded = ExchangeInfoCache.round_price(symbol, tp_price)
     qty_rounded = ExchangeInfoCache.round_quantity(symbol, qty)
 
-    # ── Sanity check: SL/TP must make sense for the position direction ──
-    # Long (stop_side=SELL): SL must be below entry, TP must be above entry
-    # Short (stop_side=BUY):  SL must be above entry, TP must be below entry
+    # ── Sanity check ──
     ref_price = entry_price if entry_price > 0 else 0.0
     if ref_price > 0:
         if stop_side == "SELL":  # Long position
             if sl_rounded >= ref_price:
-                logger.error(
-                    "SL SANITY FAIL for %s Long: SL=%s >= entry=%s — swapping SL/TP",
-                    symbol, sl_rounded, ref_price,
-                )
-                _append_activity("error", symbol, f"SL sanity fail: Long SL={sl_rounded} >= entry={ref_price}. Auto-swapping SL↔TP.")
+                logger.error("SL SANITY FAIL %s Long: SL=%s >= entry=%s — swapping", symbol, sl_rounded, ref_price)
+                _append_activity("error", symbol, f"SL sanity: Long SL={sl_rounded} >= entry={ref_price}. Swapping.")
                 sl_rounded, tp_rounded = tp_rounded, sl_rounded
             if tp_rounded <= ref_price:
-                logger.error(
-                    "TP SANITY FAIL for %s Long: TP=%s <= entry=%s — skipping SL/TP",
-                    symbol, tp_rounded, ref_price,
-                )
-                _append_activity("error", symbol, f"TP sanity fail: Long TP={tp_rounded} <= entry={ref_price}. Skipping SL/TP.")
+                logger.error("TP SANITY FAIL %s Long: TP=%s <= entry=%s — skip", symbol, tp_rounded, ref_price)
+                _append_activity("error", symbol, f"TP sanity: Long TP={tp_rounded} <= entry={ref_price}. Skipping.")
                 return
-        else:  # Short position (stop_side=BUY)
+        else:  # Short
             if sl_rounded <= ref_price:
-                logger.error(
-                    "SL SANITY FAIL for %s Short: SL=%s <= entry=%s — swapping SL/TP",
-                    symbol, sl_rounded, ref_price,
-                )
-                _append_activity("error", symbol, f"SL sanity fail: Short SL={sl_rounded} <= entry={ref_price}. Auto-swapping SL↔TP.")
+                logger.error("SL SANITY FAIL %s Short: SL=%s <= entry=%s — swapping", symbol, sl_rounded, ref_price)
+                _append_activity("error", symbol, f"SL sanity: Short SL={sl_rounded} <= entry={ref_price}. Swapping.")
                 sl_rounded, tp_rounded = tp_rounded, sl_rounded
             if tp_rounded >= ref_price:
-                logger.error(
-                    "TP SANITY FAIL for %s Short: TP=%s >= entry=%s — skipping SL/TP",
-                    symbol, tp_rounded, ref_price,
-                )
-                _append_activity("error", symbol, f"TP sanity fail: Short TP={tp_rounded} >= entry={ref_price}. Skipping SL/TP.")
+                logger.error("TP SANITY FAIL %s Short: TP=%s >= entry=%s — skip", symbol, tp_rounded, ref_price)
+                _append_activity("error", symbol, f"TP sanity: Short TP={tp_rounded} >= entry={ref_price}. Skipping.")
                 return
 
     pos_label = "Long" if stop_side == "SELL" else "Short"
-    logger.info(
-        "Setting SL/TP for %s %s: entry=%s SL=%s TP=%s qty=%s",
-        symbol, pos_label, ref_price, sl_rounded, tp_rounded, qty_rounded,
-    )
+    logger.info("Setting SL/TP for %s %s: entry=%s SL=%s TP=%s qty=%s", symbol, pos_label, ref_price, sl_rounded, tp_rounded, qty_rounded)
 
-    # ── SL ──
-    sl_ok = False
-    try:
-        binance_client.new_algo_order(
-            symbol=symbol, side=stop_side, order_type="STOP_MARKET",
-            trigger_price=sl_rounded, quantity=qty_rounded, reduce_only=True,
-            client_algo_id=f"{client_order_id}_sl",
-        )
-        sl_ok = True
-    except Exception as e:
-        logger.warning("SL algo order failed for %s: %s — trying regular order", symbol, e)
-        # Fallback: regular STOP_MARKET order
-        try:
-            binance_client.new_order(
-                symbol=symbol, side=stop_side, order_type="STOP_MARKET",
-                stop_price=sl_rounded, quantity=qty_rounded, reduce_only=True,
-                new_client_order_id=f"{client_order_id}_slr",
-            )
-            sl_ok = True
-        except Exception as e2:
-            _append_activity("error", symbol, f"SL order failed (algo+regular): {e2}")
+    def _place_algo(order_type: str, trigger: float, label: str) -> bool:
+        """Try placing algo order: first with closePosition, then with quantity. Retry once."""
+        for attempt in range(2):
+            # Attempt 1: closePosition=true (most reliable, closes entire position)
+            try:
+                result = binance_client.new_algo_order_close_position(
+                    symbol=symbol, side=stop_side, order_type=order_type,
+                    trigger_price=trigger,
+                    client_algo_id=f"{client_order_id}_{label}{'' if attempt == 0 else '_r'}",
+                )
+                logger.info("%s algo (closePosition) OK for %s: %s", label.upper(), symbol, result)
+                return True
+            except Exception as e1:
+                logger.warning("%s algo (closePosition) failed for %s attempt %d: %s", label.upper(), symbol, attempt + 1, e1)
+                # Attempt with quantity instead
+                try:
+                    result = binance_client.new_algo_order(
+                        symbol=symbol, side=stop_side, order_type=order_type,
+                        trigger_price=trigger, quantity=qty_rounded, reduce_only=True,
+                        client_algo_id=f"{client_order_id}_{label}q{attempt}",
+                    )
+                    logger.info("%s algo (qty) OK for %s: %s", label.upper(), symbol, result)
+                    return True
+                except Exception as e2:
+                    logger.warning("%s algo (qty) failed for %s attempt %d: %s", label.upper(), symbol, attempt + 1, e2)
+                    if attempt == 0:
+                        import time as _t
+                        _t.sleep(0.5)  # brief pause before retry
+                        continue
+                    _append_activity("error", symbol, f"{label.upper()} order failed after retries: {e2}")
+                    return False
+        return False
 
-    # ── TP ──
-    tp_ok = False
-    try:
-        binance_client.new_algo_order(
-            symbol=symbol, side=stop_side, order_type="TAKE_PROFIT_MARKET",
-            trigger_price=tp_rounded, quantity=qty_rounded, reduce_only=True,
-            client_algo_id=f"{client_order_id}_tp",
-        )
-        tp_ok = True
-    except Exception as e:
-        logger.warning("TP algo order failed for %s: %s — trying regular order", symbol, e)
-        # Fallback: regular TAKE_PROFIT_MARKET order
-        try:
-            binance_client.new_order(
-                symbol=symbol, side=stop_side, order_type="TAKE_PROFIT_MARKET",
-                stop_price=tp_rounded, quantity=qty_rounded, reduce_only=True,
-                new_client_order_id=f"{client_order_id}_tpr",
-            )
-            tp_ok = True
-        except Exception as e2:
-            _append_activity("error", symbol, f"TP order failed (algo+regular): {e2}")
+    sl_ok = _place_algo("STOP_MARKET", sl_rounded, "sl")
+    tp_ok = _place_algo("TAKE_PROFIT_MARKET", tp_rounded, "tp")
 
     if sl_ok and tp_ok:
         _append_activity("system", symbol, f"SL={sl_rounded} TP={tp_rounded} set OK (entry={ref_price}, {pos_label})")
     elif sl_ok:
-        _append_activity("system", symbol, f"SL={sl_rounded} set OK, TP failed (entry={ref_price}, {pos_label})")
+        _append_activity("system", symbol, f"SL={sl_rounded} OK, TP={tp_rounded} FAILED (entry={ref_price}, {pos_label})")
     elif tp_ok:
-        _append_activity("system", symbol, f"TP={tp_rounded} set OK, SL failed (entry={ref_price}, {pos_label})")
+        _append_activity("system", symbol, f"TP={tp_rounded} OK, SL={sl_rounded} FAILED (entry={ref_price}, {pos_label})")
+    else:
+        _append_activity("error", symbol, f"SL+TP both FAILED (entry={ref_price}, {pos_label})")
 
 
 def _get_live_position(symbol: str) -> dict[str, Any] | None:
