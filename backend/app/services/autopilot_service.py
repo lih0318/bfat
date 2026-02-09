@@ -134,6 +134,69 @@ def _has_position(symbol: str) -> bool:
         return True
 
 
+def _set_sl_tp(
+    symbol: str, stop_side: str, sl_price: float, tp_price: float,
+    qty: float, client_order_id: str,
+) -> None:
+    """Set SL and TP for a position. Tries Algo Order first, falls back to regular order."""
+    from app.services.exchange_info import ExchangeInfoCache
+    # Ensure values are properly rounded
+    sl_rounded = ExchangeInfoCache.round_price(symbol, sl_price)
+    tp_rounded = ExchangeInfoCache.round_price(symbol, tp_price)
+    qty_rounded = ExchangeInfoCache.round_quantity(symbol, qty)
+
+    # ── SL ──
+    sl_ok = False
+    try:
+        binance_client.new_algo_order(
+            symbol=symbol, side=stop_side, order_type="STOP_MARKET",
+            trigger_price=sl_rounded, quantity=qty_rounded, reduce_only=True,
+            client_algo_id=f"{client_order_id}_sl",
+        )
+        sl_ok = True
+    except Exception as e:
+        logger.warning("SL algo order failed for %s: %s — trying regular order", symbol, e)
+        # Fallback: regular STOP_MARKET order
+        try:
+            binance_client.new_order(
+                symbol=symbol, side=stop_side, order_type="STOP_MARKET",
+                stop_price=sl_rounded, quantity=qty_rounded, reduce_only=True,
+                new_client_order_id=f"{client_order_id}_slr",
+            )
+            sl_ok = True
+        except Exception as e2:
+            _append_activity("error", symbol, f"SL order failed (algo+regular): {e2}")
+
+    # ── TP ──
+    tp_ok = False
+    try:
+        binance_client.new_algo_order(
+            symbol=symbol, side=stop_side, order_type="TAKE_PROFIT_MARKET",
+            trigger_price=tp_rounded, quantity=qty_rounded, reduce_only=True,
+            client_algo_id=f"{client_order_id}_tp",
+        )
+        tp_ok = True
+    except Exception as e:
+        logger.warning("TP algo order failed for %s: %s — trying regular order", symbol, e)
+        # Fallback: regular TAKE_PROFIT_MARKET order
+        try:
+            binance_client.new_order(
+                symbol=symbol, side=stop_side, order_type="TAKE_PROFIT_MARKET",
+                stop_price=tp_rounded, quantity=qty_rounded, reduce_only=True,
+                new_client_order_id=f"{client_order_id}_tpr",
+            )
+            tp_ok = True
+        except Exception as e2:
+            _append_activity("error", symbol, f"TP order failed (algo+regular): {e2}")
+
+    if sl_ok and tp_ok:
+        _append_activity("system", symbol, f"SL={sl_rounded} TP={tp_rounded} set OK")
+    elif sl_ok:
+        _append_activity("system", symbol, f"SL={sl_rounded} set OK, TP failed")
+    elif tp_ok:
+        _append_activity("system", symbol, f"TP={tp_rounded} set OK, SL failed")
+
+
 def _get_live_position(symbol: str) -> dict[str, Any] | None:
     """Return current live position for symbol: { side, qty, entry_price, notional } or None."""
     try:
@@ -222,28 +285,11 @@ def _check_pending_limit_orders(cfg: AutopilotConfig) -> None:
                         "system", sym,
                         f"Limit order filled @ {info['limit_price']}. Setting SL/TP...",
                     )
-                    # Set SL/TP algo orders
+                    # Set SL/TP via helper (algo → fallback regular)
                     stop_side = "SELL" if info["signal_side"] == "long" else "BUY"
                     sl_price = info["sl"]
                     tp_price = info["tp"]
-                    try:
-                        binance_client.new_algo_order(
-                            symbol=sym, side=stop_side, order_type="STOP_MARKET",
-                            trigger_price=sl_price, quantity=info["qty"],
-                            reduce_only=True,
-                            client_algo_id=f"{info['client_order_id']}_sl",
-                        )
-                    except Exception as e:
-                        _append_activity("error", sym, f"SL order after limit fill failed: {e}")
-                    try:
-                        binance_client.new_algo_order(
-                            symbol=sym, side=stop_side, order_type="TAKE_PROFIT_MARKET",
-                            trigger_price=tp_price, quantity=info["qty"],
-                            reduce_only=True,
-                            client_algo_id=f"{info['client_order_id']}_tp",
-                        )
-                    except Exception as e:
-                        _append_activity("error", sym, f"TP order after limit fill failed: {e}")
+                    _set_sl_tp(sym, stop_side, sl_price, tp_price, info["qty"], info["client_order_id"])
                     # Journal entry
                     try:
                         journal_append({
@@ -654,22 +700,7 @@ def run_one_cycle() -> None:
                 # Filled immediately — set SL/TP now
                 _append_activity("system", symbol, f"Limit order filled immediately @ {limit_price}. Setting SL/TP...")
                 stop_side = "SELL" if signal.side == "long" else "BUY"
-                try:
-                    binance_client.new_algo_order(
-                        symbol=symbol, side=stop_side, order_type="STOP_MARKET",
-                        trigger_price=sl_price, quantity=qty, reduce_only=True,
-                        client_algo_id=f"{client_order_id}_sl",
-                    )
-                except Exception as e:
-                    _append_activity("error", symbol, f"SL order failed: {e}")
-                try:
-                    binance_client.new_algo_order(
-                        symbol=symbol, side=stop_side, order_type="TAKE_PROFIT_MARKET",
-                        trigger_price=tp_price, quantity=qty, reduce_only=True,
-                        client_algo_id=f"{client_order_id}_tp",
-                    )
-                except Exception as e:
-                    _append_activity("error", symbol, f"TP order failed: {e}")
+                _set_sl_tp(symbol, stop_side, sl_price, tp_price, qty, client_order_id)
                 try:
                     journal_append({
                         "type": "entry", "symbol": symbol, "side": side,
@@ -751,30 +782,7 @@ def run_one_cycle() -> None:
             except Exception as je:
                 logger.warning("Journal append failed: %s", je)
             stop_side = "SELL" if signal.side == "long" else "BUY"
-            try:
-                binance_client.new_algo_order(
-                    symbol=symbol,
-                    side=stop_side,
-                    order_type="STOP_MARKET",
-                    trigger_price=sl_price,
-                    quantity=qty,
-                    reduce_only=True,
-                    client_algo_id=f"{client_order_id}_sl",
-                )
-            except Exception as e:
-                _append_activity("error", symbol, f"SL order failed: {e}")
-            try:
-                binance_client.new_algo_order(
-                    symbol=symbol,
-                    side=stop_side,
-                    order_type="TAKE_PROFIT_MARKET",
-                    trigger_price=tp_price,
-                    quantity=qty,
-                    reduce_only=True,
-                    client_algo_id=f"{client_order_id}_tp",
-                )
-            except Exception as e:
-                _append_activity("error", symbol, f"TP order failed: {e}")
+            _set_sl_tp(symbol, stop_side, sl_price, tp_price, qty, client_order_id)
     except Exception as e:
         logger.exception("Autopilot cycle error: %s", e)
         _append_activity("error", symbol, str(e))
