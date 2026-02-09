@@ -14,20 +14,23 @@ interface PositionRow {
   tpPrice?: string
 }
 
-/** Build map: symbol -> { sl, tp } from journal (latest entry per symbol with type 'entry'). */
-function buildSlTpFromJournal(entries: JournalEntry[]): Record<string, { sl?: number; tp?: number }> {
-  const bySymbol: Record<string, { sl?: number; tp?: number }> = {}
+/** Build map: symbol -> { sl, tp, side } from journal (most recent entry per symbol). */
+function buildSlTpFromJournal(entries: JournalEntry[]): Record<string, { sl?: number; tp?: number; side?: string }> {
+  const bySymbol: Record<string, { sl?: number; tp?: number; side?: string }> = {}
   for (const e of entries) {
     if (e.type !== 'entry' || !e.symbol) continue
-    if ((e.sl == null && e.tp == null) || bySymbol[e.symbol]) continue
-    bySymbol[e.symbol] = { sl: e.sl, tp: e.tp }
+    if (e.sl == null && e.tp == null) continue
+    // Always overwrite — entries are newest-first, so the last one written wins as the most recent
+    if (!bySymbol[e.symbol]) {
+      bySymbol[e.symbol] = { sl: e.sl, tp: e.tp, side: e.side }
+    }
   }
   return bySymbol
 }
 
 export function PositionsTab() {
   const [positions, setPositions] = useState<PositionRow[]>([])
-  const [journalSlTpBySymbol, setJournalSlTpBySymbol] = useState<Record<string, { sl?: number; tp?: number }>>({})
+  const [journalSlTpBySymbol, setJournalSlTpBySymbol] = useState<Record<string, { sl?: number; tp?: number; side?: string }>>({})
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -72,12 +75,24 @@ export function PositionsTab() {
     }
   }, [])
 
-  const getSlTp = (symbol: string): { sl?: string; tp?: string } => {
+  const getSlTp = (symbol: string, positionSide: string): { sl?: string; tp?: string } => {
     const j = journalSlTpBySymbol[symbol]
     if (!j) return {}
+    let sl = j.sl
+    let tp = j.tp
+    // Sanity check: for Long, SL should be below TP; for Short, SL should be above TP.
+    // If journal values seem swapped relative to position side, correct the display.
+    if (sl != null && tp != null) {
+      if (positionSide === 'Long' && sl > tp) {
+        // Swapped — sl is actually tp and vice versa
+        ;[sl, tp] = [tp, sl]
+      } else if (positionSide === 'Short' && sl < tp) {
+        ;[sl, tp] = [tp, sl]
+      }
+    }
     return {
-      sl: j.sl != null ? String(j.sl) : undefined,
-      tp: j.tp != null ? String(j.tp) : undefined,
+      sl: sl != null ? String(sl) : undefined,
+      tp: tp != null ? String(tp) : undefined,
     }
   }
 
@@ -115,7 +130,7 @@ export function PositionsTab() {
               </thead>
               <tbody>
                 {positions.map((row) => {
-                  const { sl, tp } = getSlTp(row.symbol)
+                  const { sl, tp } = getSlTp(row.symbol, row.side)
                   const pnl = parseFloat(row.unrealizedProfit)
                   const amt = Math.abs(parseFloat(row.positionAmt))
                   const notional = Number(row.entryPrice) * amt
@@ -133,8 +148,8 @@ export function PositionsTab() {
                         {pnl >= 0 ? '+' : ''}{Number(row.unrealizedProfit).toFixed(2)}
                         <span className="pnl-pct"> ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%)</span>
                       </td>
-                      <td className="sl-tp">{sl != null ? Number(sl).toFixed(2) : '-'}</td>
-                      <td className="sl-tp">{tp != null ? Number(tp).toFixed(2) : '-'}</td>
+                      <td className="sl-tp sl-val">{sl != null ? Number(sl).toFixed(2) : '-'}</td>
+                      <td className="sl-tp tp-val">{tp != null ? Number(tp).toFixed(2) : '-'}</td>
                     </tr>
                   )
                 })}

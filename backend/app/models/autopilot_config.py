@@ -11,8 +11,8 @@ class AutopilotConfig(BaseModel):
     max_usdt: float = Field(1000.0, description="Max USDT for Autopilot to use")
     max_leverage: int = Field(5, ge=1, le=125, description="Max leverage")
     daily_loss_limit_usdt: float = Field(0.0, description="Daily loss limit USDT (0=disabled)")
-    # Strategy mode: trend = Confluence+ATR, range = RSI mean reversion (sideways market)
-    strategy_mode: Literal["trend", "range"] = Field("trend", description="trend=follow trend, range=mean reversion in sideways")
+    # Strategy mode: auto = 1h regime decides, trend = Confluence+ATR, range = RSI mean reversion
+    strategy_mode: Literal["auto", "trend", "range"] = Field("auto", description="auto=1h regime decides, trend=follow trend, range=mean reversion")
     # Range mode: RSI oversold -> long, RSI overbought -> short
     rsi_oversold: float = Field(30.0, ge=0, le=100, description="Range mode: long when RSI <= this")
     rsi_overbought: float = Field(70.0, ge=0, le=100, description="Range mode: short when RSI >= this")
@@ -35,6 +35,14 @@ class AutopilotConfig(BaseModel):
     flip_fee_bps: float = Field(8.0, ge=0, le=100, description="Fee in basis points per leg (e.g. 8 = 0.08%)")
     flip_slippage_bps: float = Field(5.0, ge=0, le=100, description="Slippage estimate in bps per leg")
     flip_min_edge_ratio: float = Field(1.5, gt=0, le=10, description="New position upside must be >= this × flip cost")
+    # Entry order type: limit = price filter + limit order, market = instant market order (fallback)
+    entry_type: Literal["limit", "market"] = Field("limit", description="limit=price filter+limit order, market=instant market order")
+    # Price filter: only enter if price is within EMA(20) ± ATR × this value
+    price_filter_atr_mult: float = Field(0.3, ge=0, le=2.0, description="Price filter: entry within EMA±ATR×this (0=disabled)")
+    # Limit order offset: place order at price ± ATR × this value (more favorable)
+    limit_offset_atr_mult: float = Field(0.15, ge=0, le=1.0, description="Limit order offset from current price (ATR×)")
+    # Limit order TTL: cancel unfilled limit order after N minutes
+    limit_ttl_minutes: int = Field(15, ge=1, le=120, description="Cancel unfilled limit order after N minutes")
     trading_hours_utc: Optional[str] = Field(None, description="e.g. 08:00-16:00 (UTC)")
     alerts_telegram_bot_token: Optional[str] = Field(None)
     alerts_telegram_chat_id: Optional[str] = Field(None)

@@ -433,3 +433,44 @@
   color: #e8eaed;
   word-break: break-word;
 }
+
+/* Entry Order recommended values table */
+.entry-ref-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+  margin-top: 0.5rem;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.entry-ref-table th,
+.entry-ref-table td {
+  padding: 0.35rem 0.6rem;
+  text-align: center;
+  border-bottom: 1px solid var(--border);
+}
+
+.entry-ref-table th {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.entry-ref-table td:first-child {
+  text-align: left;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.entry-ref-table td strong {
+  color: #58a6ff;
+}
+
+.entry-ref-table tbody tr:last-child td {
+  border-bottom: none;
+}

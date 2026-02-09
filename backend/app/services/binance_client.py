@@ -107,6 +107,27 @@ class BinanceFuturesClient:
         data = self._signed_request("GET", "/fapi/v1/income", params)
         return data if isinstance(data, list) else []
 
+    def user_trades(
+        self,
+        symbol: str,
+        start_time: Optional[int] = None,
+        end_time: Optional[int] = None,
+        limit: int = 100,
+        recv_window: int = DEFAULT_RECV_WINDOW,
+    ) -> list[dict[str, Any]]:
+        """Get account trade list for a symbol (GET /fapi/v1/userTrades)."""
+        params: dict[str, Any] = {
+            "symbol": symbol,
+            "limit": limit,
+            "recvWindow": recv_window,
+        }
+        if start_time is not None:
+            params["startTime"] = start_time
+        if end_time is not None:
+            params["endTime"] = end_time
+        data = self._signed_request("GET", "/fapi/v1/userTrades", params)
+        return data if isinstance(data, list) else []
+
     # --- Market ---
     def klines(
         self,
@@ -194,6 +215,14 @@ class BinanceFuturesClient:
             except Exception:
                 pass
 
+    @staticmethod
+    def _format_decimal(value: float, max_decimals: int = 8) -> str:
+        """Format float to string without scientific notation and trailing zeros, respecting precision."""
+        formatted = f"{value:.{max_decimals}f}"
+        if "." in formatted:
+            formatted = formatted.rstrip("0").rstrip(".")
+        return formatted
+
     def new_algo_order(
         self,
         symbol: str,
@@ -209,23 +238,28 @@ class BinanceFuturesClient:
         """
         Place STOP_MARKET or TAKE_PROFIT_MARKET via Algo Order API (required since -4120).
         algoType=CONDITIONAL, triggerPrice required.
+        Returns response dict. Raises RuntimeError if Binance returns an error code.
         """
         params: dict[str, Any] = {
             "algoType": "CONDITIONAL",
             "symbol": symbol,
             "side": side,
             "type": order_type,
-            "triggerPrice": trigger_price,
+            "triggerPrice": self._format_decimal(trigger_price),
             "reduceOnly": "true" if reduce_only else "false",
             "workingType": working_type,
             "recvWindow": recv_window,
             "timestamp": self._timestamp_ms(),
         }
         if quantity is not None:
-            params["quantity"] = quantity
+            params["quantity"] = self._format_decimal(quantity)
         if client_algo_id is not None:
             params["clientAlgoId"] = client_algo_id
-        return self._signed_request("POST", "/fapi/v1/algoOrder", params)
+        result = self._signed_request("POST", "/fapi/v1/algoOrder", params)
+        # Validate response: Binance may return HTTP 200 with error in body
+        if isinstance(result, dict) and result.get("code") and int(result["code"]) < 0:
+            raise RuntimeError(f"Algo order rejected: code={result.get('code')} msg={result.get('msg')}")
+        return result
 
     def new_order(
         self,

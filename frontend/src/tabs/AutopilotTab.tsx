@@ -1,6 +1,27 @@
 import { useEffect, useRef, useState } from 'react'
-import { api } from '../api/client'
+import { api, type MarketRegimeResponse, type RegimeTf } from '../api/client'
 import './AutopilotTab.css'
+
+function RegimeBlock({ tf }: { tf: RegimeTf }) {
+  return (
+    <>
+      <p className={`regime-value regime--${tf.regime}`}>
+        {tf.regime === 'ranging' ? 'Ranging (횡보)' : 'Trending (추세)'}
+        {tf.adx != null && <span className="regime-adx"> ADX: {tf.adx}</span>}
+      </p>
+      {tf.regime === 'trending' && tf.trend_direction !== 'neutral' && (
+        <p className="regime-direction">
+          {tf.trend_direction === 'up' ? '↑ 상승 추세' : '↓ 하락 추세'}
+        </p>
+      )}
+      <p className="regime-hint">
+        {tf.regime === 'ranging'
+          ? `${tf.timeframe.toUpperCase()} ADX < 25. Range 전략 고려.`
+          : `${tf.timeframe.toUpperCase()} ADX ≥ 25. Trend 전략 고려.`}
+      </p>
+    </>
+  )
+}
 
 interface AutopilotStatus {
   running: boolean
@@ -17,24 +38,16 @@ interface ActivityItem {
   message: string
 }
 
-interface MarketRegime {
-  symbol: string
-  timeframe: string
-  adx: number | null
-  regime: string
-  trend_direction: string
-}
-
 export function AutopilotTab() {
   const [status, setStatus] = useState<AutopilotStatus | null>(null)
   const [activity, setActivity] = useState<ActivityItem[]>([])
-  const [marketRegime, setMarketRegime] = useState<MarketRegime | null>(null)
+  const [marketRegime, setMarketRegime] = useState<MarketRegimeResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [activityMode, setActivityMode] = useState<'all' | 'live'>('all')
   const formDirtyRef = useRef(false)
   const [form, setForm] = useState({
-    strategy_mode: 'trend' as 'trend' | 'range',
+    strategy_mode: 'auto' as 'auto' | 'trend' | 'range',
     rsi_oversold: 30,
     rsi_overbought: 70,
     max_usdt: 1000,
@@ -44,6 +57,10 @@ export function AutopilotTab() {
     symbol: 'BTCUSDT',
     entry_tf: '15m',
     trend_tf: '1h',
+    entry_type: 'limit' as 'limit' | 'market',
+    price_filter_atr_mult: 0.3,
+    limit_offset_atr_mult: 0.15,
+    limit_ttl_minutes: 15,
     allow_position_flip: true,
     flip_fee_bps: 8,
     flip_slippage_bps: 5,
@@ -105,7 +122,7 @@ export function AutopilotTab() {
 
   const applyConfigToForm = (config: Record<string, unknown>, prev: typeof form) => ({
     ...prev,
-    strategy_mode: (config.strategy_mode === 'range' ? 'range' : 'trend') as 'trend' | 'range',
+    strategy_mode: (['auto', 'trend', 'range'].includes(config.strategy_mode) ? config.strategy_mode : 'auto') as 'auto' | 'trend' | 'range',
     rsi_oversold: Number(config.rsi_oversold ?? prev.rsi_oversold ?? 30),
     rsi_overbought: Number(config.rsi_overbought ?? prev.rsi_overbought ?? 70),
     max_usdt: Number(config.max_usdt ?? prev.max_usdt),
@@ -115,6 +132,10 @@ export function AutopilotTab() {
     symbol: String(config.symbol ?? prev.symbol),
     entry_tf: String(config.entry_tf ?? prev.entry_tf),
     trend_tf: String(config.trend_tf ?? prev.trend_tf),
+    entry_type: (['limit', 'market'].includes(String(config.entry_type)) ? String(config.entry_type) : prev.entry_type) as 'limit' | 'market',
+    price_filter_atr_mult: Number(config.price_filter_atr_mult ?? prev.price_filter_atr_mult),
+    limit_offset_atr_mult: Number(config.limit_offset_atr_mult ?? prev.limit_offset_atr_mult),
+    limit_ttl_minutes: Number(config.limit_ttl_minutes ?? prev.limit_ttl_minutes),
     allow_position_flip: Boolean(config.allow_position_flip ?? prev.allow_position_flip),
     flip_fee_bps: Number(config.flip_fee_bps ?? prev.flip_fee_bps),
     flip_slippage_bps: Number(config.flip_slippage_bps ?? prev.flip_slippage_bps),
@@ -137,6 +158,10 @@ export function AutopilotTab() {
         symbol: form.symbol,
         entry_tf: form.entry_tf,
         trend_tf: form.trend_tf,
+        entry_type: form.entry_type,
+        price_filter_atr_mult: form.price_filter_atr_mult,
+        limit_offset_atr_mult: form.limit_offset_atr_mult,
+        limit_ttl_minutes: form.limit_ttl_minutes,
         allow_position_flip: form.allow_position_flip,
         flip_fee_bps: form.flip_fee_bps,
         flip_slippage_bps: form.flip_slippage_bps,
@@ -176,31 +201,23 @@ export function AutopilotTab() {
             </button>
           </div>
         </div>
-        <div className="richman-regime-card">
-          <h3>Market regime (1D)</h3>
-          {marketRegime ? (
-            <>
-              <p className={`regime-value regime--${marketRegime.regime}`}>
-                {marketRegime.regime === 'ranging' ? 'Ranging (횡보)' : 'Trending (추세)'}
-                {marketRegime.adx != null && (
-                  <span className="regime-adx"> ADX: {marketRegime.adx}</span>
-                )}
-              </p>
-              {marketRegime.regime === 'trending' && marketRegime.trend_direction !== 'neutral' && (
-                <p className="regime-direction">
-                  {marketRegime.trend_direction === 'up' ? '↑ 상승 추세' : '↓ 하락 추세'}
-                </p>
-              )}
-              <p className="regime-hint">
-                {marketRegime.regime === 'ranging'
-                  ? '1D ADX < 25. Range 전략 고려.'
-                  : '1D ADX ≥ 25. Trend 전략 고려.'}
-              </p>
-            </>
-          ) : (
+        {marketRegime ? (
+          <>
+            <div className="richman-regime-card">
+              <h3>Market regime — 1D (큰 시야) · {marketRegime.symbol}</h3>
+              <RegimeBlock tf={marketRegime['1d']} />
+            </div>
+            <div className="richman-regime-card">
+              <h3>Market regime — 1h (세부) · {marketRegime.symbol}</h3>
+              <RegimeBlock tf={marketRegime['1h']} />
+            </div>
+          </>
+        ) : (
+          <div className="richman-regime-card">
+            <h3>Market regime</h3>
             <p className="regime-unknown">로딩 중…</p>
-          )}
-        </div>
+          </div>
+        )}
       </div>
       <div className="richman-top">
         <div className="richman-config-card">
@@ -215,14 +232,15 @@ export function AutopilotTab() {
                     value={form.strategy_mode}
                     onChange={(e) => {
                       formDirtyRef.current = true
-                      setForm((f) => ({ ...f, strategy_mode: e.target.value as 'trend' | 'range' }))
+                      setForm((f) => ({ ...f, strategy_mode: e.target.value as 'auto' | 'trend' | 'range' }))
                     }}
                   >
-                    <option value="trend">Trend (추세) — 추세 추종</option>
-                    <option value="range">Range (횡보) — RSI 평균 회귀</option>
+                    <option value="auto">Auto (1h 기준) — 자동 선택</option>
+                    <option value="trend">Trend (추세) — 추세 추종 (수동)</option>
+                    <option value="range">Range (횡보) — RSI 평균 회귀 (수동)</option>
                   </select>
                 </label>
-                {form.strategy_mode === 'range' && (
+                {(form.strategy_mode === 'range' || form.strategy_mode === 'auto') && (
                   <>
                     <label>
                       <span>RSI 과매도 (롱 진입)</span>
@@ -278,6 +296,92 @@ export function AutopilotTab() {
                   />
                 </label>
               </div>
+            </section>
+            <section className="config-section">
+              <h4>Entry Order</h4>
+              <div className="config-row">
+                <label>
+                  <span>Entry Type</span>
+                  <select
+                    value={form.entry_type}
+                    onChange={(e) => {
+                      formDirtyRef.current = true
+                      setForm((f) => ({ ...f, entry_type: e.target.value as 'limit' | 'market' }))
+                    }}
+                  >
+                    <option value="limit">Limit (가격필터 + 지정가)</option>
+                    <option value="market">Market (즉시 시장가)</option>
+                  </select>
+                </label>
+                {form.entry_type === 'limit' && (
+                  <>
+                    <label>
+                      <span>Price Filter (ATR x)</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={2}
+                        step={0.05}
+                        value={form.price_filter_atr_mult}
+                        onChange={(e) => { formDirtyRef.current = true; setForm((f) => ({ ...f, price_filter_atr_mult: Number(e.target.value) || 0 })) }}
+                      />
+                    </label>
+                    <label>
+                      <span>Limit Offset (ATR x)</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={form.limit_offset_atr_mult}
+                        onChange={(e) => { formDirtyRef.current = true; setForm((f) => ({ ...f, limit_offset_atr_mult: Number(e.target.value) || 0 })) }}
+                      />
+                    </label>
+                    <label>
+                      <span>Limit TTL (분)</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={120}
+                        value={form.limit_ttl_minutes}
+                        onChange={(e) => { formDirtyRef.current = true; setForm((f) => ({ ...f, limit_ttl_minutes: Math.max(1, Number(e.target.value) || 15) })) }}
+                      />
+                    </label>
+                  </>
+                )}
+              </div>
+              {form.entry_type === 'limit' && (
+                <table className="entry-ref-table">
+                  <thead>
+                    <tr>
+                      <th>설정</th>
+                      <th>보수적 (체결 우선)</th>
+                      <th>균형 (추천)</th>
+                      <th>공격적 (가격 우선)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>Price Filter</td>
+                      <td>0.4</td>
+                      <td><strong>0.3</strong></td>
+                      <td>0.2</td>
+                    </tr>
+                    <tr>
+                      <td>Limit Offset</td>
+                      <td>0.08</td>
+                      <td><strong>0.15</strong></td>
+                      <td>0.2</td>
+                    </tr>
+                    <tr>
+                      <td>TTL (분)</td>
+                      <td>20</td>
+                      <td><strong>15</strong></td>
+                      <td>10</td>
+                    </tr>
+                  </tbody>
+                </table>
+              )}
             </section>
             <section className="config-section">
               <h4>Loss Limit &amp; Reentry</h4>
