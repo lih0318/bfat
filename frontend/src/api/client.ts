@@ -27,10 +27,17 @@ async function fetchApi<T>(path: string, init?: RequestInit): Promise<T> {
   }
   const res = await fetch(url, { ...init, headers, credentials: 'omit' })
   if (res.status === 401) {
-    // Token expired or invalid — clear it so login screen shows
-    clearAuthToken()
-    window.dispatchEvent(new Event('auth-expired'))
-    throw new Error('Session expired. Please log in again.')
+    // For auth endpoints (login, check), don't treat 401 as session expiry —
+    // just pass the error through so the caller can show the real message.
+    const isAuthEndpoint = path.includes('/api/auth/')
+    if (!isAuthEndpoint) {
+      clearAuthToken()
+      window.dispatchEvent(new Event('auth-expired'))
+      throw new Error('Session expired. Please log in again.')
+    }
+    // Auth endpoint 401: return actual error detail from server
+    const text = await res.text()
+    throw new Error(text || 'Authentication failed')
   }
   if (!res.ok) {
     const text = await res.text()
