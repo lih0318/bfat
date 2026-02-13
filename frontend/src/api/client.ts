@@ -59,6 +59,29 @@ export interface MarketRegimeResponse {
   '1h': RegimeTf
 }
 
+export interface PortfolioItem {
+  symbol: string
+  side: string
+  target_qty: number
+  weight: number
+  trend_score: number
+  target_notional: number
+  rsi: number | null
+  funding_rate: number | null
+}
+
+export interface SignalItem {
+  symbol: string
+  trend_score_raw: number
+  trend_score: number
+  final_score: number
+  rsi: number
+  rsi_scale: number
+  funding_rate: number
+  funding_scale: number
+  horizons: Record<number, number>
+}
+
 export const api = {
   health: () => fetchApi<{ status: string }>('/api/health'),
   auth: {
@@ -134,6 +157,8 @@ export const api = {
       const q = symbol != null && symbol !== '' ? `?symbol=${encodeURIComponent(symbol)}` : ''
       return fetchApi<MarketRegimeResponse>(`/api/autopilot/market-regime${q}`)
     },
+    portfolio: () => fetchApi<PortfolioItem[]>('/api/autopilot/portfolio'),
+    signals: () => fetchApi<SignalItem[]>('/api/autopilot/signals'),
   },
   journal: {
     list: (limit?: number, mode?: 'all' | 'live', type?: string) => {

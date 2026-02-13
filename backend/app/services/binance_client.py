@@ -347,5 +347,68 @@ class BinanceFuturesClient:
     def set_leverage(self, symbol: str, leverage: int, recv_window: int = DEFAULT_RECV_WINDOW) -> dict[str, Any]:
         return self.client.change_leverage(symbol=symbol, leverage=leverage, recvWindow=recv_window)
 
+    # ── New methods for TSMOM engine ─────────────────────────────
+
+    def book_ticker(self, symbol: str) -> dict[str, Any]:
+        """Best bid/ask for a symbol (GET /fapi/v1/ticker/bookTicker)."""
+        data = self.client.book_ticker(symbol=symbol)
+        if isinstance(data, list):
+            return data[0] if data else {}
+        return data if isinstance(data, dict) else {}
+
+    def ticker_24hr(self, symbol: Optional[str] = None) -> Any:
+        """24-hour ticker statistics. Returns list (all) or dict (single symbol)."""
+        if symbol:
+            return self.client.ticker_24hr_price_change(symbol=symbol)
+        return self.client.ticker_24hr_price_change()
+
+    def change_position_mode(self, dual_side: bool = False, recv_window: int = DEFAULT_RECV_WINDOW) -> dict[str, Any]:
+        """Set hedge mode (dual=True) or one-way mode (dual=False)."""
+        return self._signed_request("POST", "/fapi/v1/positionSide/dual", {
+            "dualSidePosition": "true" if dual_side else "false",
+            "recvWindow": recv_window,
+        })
+
+    def get_position_mode(self, recv_window: int = DEFAULT_RECV_WINDOW) -> dict[str, Any]:
+        """Get current position mode."""
+        return self._signed_request("GET", "/fapi/v1/positionSide/dual", {
+            "recvWindow": recv_window,
+        })
+
+    def listen_key_create(self) -> str:
+        """Create a listenKey for user data stream."""
+        data = self._signed_request("POST", "/fapi/v1/listenKey", {})
+        return data.get("listenKey", "") if isinstance(data, dict) else ""
+
+    def listen_key_keepalive(self) -> None:
+        """Keepalive existing listenKey."""
+        self._signed_request("PUT", "/fapi/v1/listenKey", {})
+
+    def listen_key_close(self) -> None:
+        """Close listenKey."""
+        self._signed_request("DELETE", "/fapi/v1/listenKey", {})
+
+    def cancel_order(self, symbol: str, order_id: Optional[int] = None,
+                     client_order_id: Optional[str] = None,
+                     recv_window: int = DEFAULT_RECV_WINDOW) -> dict[str, Any]:
+        """Cancel a single order by orderId or origClientOrderId."""
+        params: dict[str, Any] = {"symbol": symbol, "recvWindow": recv_window}
+        if order_id is not None:
+            params["orderId"] = order_id
+        if client_order_id is not None:
+            params["origClientOrderId"] = client_order_id
+        return self.client.cancel_order(**params)
+
+    def get_order(self, symbol: str, order_id: Optional[int] = None,
+                  client_order_id: Optional[str] = None,
+                  recv_window: int = DEFAULT_RECV_WINDOW) -> dict[str, Any]:
+        """Query a single order."""
+        params: dict[str, Any] = {"symbol": symbol, "recvWindow": recv_window}
+        if order_id is not None:
+            params["orderId"] = order_id
+        if client_order_id is not None:
+            params["origClientOrderId"] = client_order_id
+        return self.client.query_order(**params)
+
 
 binance_client = BinanceFuturesClient()

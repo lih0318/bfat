@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.api import account, klines, positions, autopilot, journal, auth
+from app.api import account, klines, positions, autopilot, journal, auth, engine_api
 from app.core.config import settings
 
 app = FastAPI(
@@ -60,7 +60,10 @@ app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(account.router, prefix="/api/account", tags=["account"])
 app.include_router(klines.router, prefix="/api/klines", tags=["klines"])
 app.include_router(positions.router, prefix="/api/positions", tags=["positions"])
-app.include_router(autopilot.router, prefix="/api/autopilot", tags=["autopilot"])
+# New TSMOM engine API (replaces old autopilot)
+app.include_router(engine_api.router, prefix="/api/autopilot", tags=["engine"])
+# Keep old autopilot router at /api/autopilot-legacy for reference (optional)
+app.include_router(autopilot.router, prefix="/api/autopilot-legacy", tags=["autopilot-legacy"])
 app.include_router(journal.router, prefix="/api/journal", tags=["journal"])
 
 

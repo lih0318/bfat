@@ -1,13 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, type MarketRegimeResponse, type RegimeTf } from '../api/client'
+import { api, type MarketRegimeResponse, type RegimeTf, type PortfolioItem, type SignalItem } from '../api/client'
 import './AutopilotTab.css'
 
+/* ── Regime Block (backward compat) ────────────────────────────── */
+
 function RegimeBlock({ tf }: { tf: RegimeTf }) {
+  const ts = (tf as any).trend_score
   return (
     <>
       <p className={`regime-value regime--${tf.regime}`}>
         {tf.regime === 'ranging' ? 'Ranging (횡보)' : 'Trending (추세)'}
         {tf.adx != null && <span className="regime-adx"> ADX: {tf.adx}</span>}
+        {ts != null && <span className="regime-adx"> TS: {ts}</span>}
       </p>
       {tf.regime === 'trending' && tf.trend_direction !== 'neutral' && (
         <p className="regime-direction">
@@ -16,19 +20,25 @@ function RegimeBlock({ tf }: { tf: RegimeTf }) {
       )}
       <p className="regime-hint">
         {tf.regime === 'ranging'
-          ? `${tf.timeframe.toUpperCase()} ADX < 25. Range 전략 고려.`
-          : `${tf.timeframe.toUpperCase()} ADX ≥ 25. Trend 전략 고려.`}
+          ? `${tf.timeframe.toUpperCase()} — Range 전략 고려.`
+          : `${tf.timeframe.toUpperCase()} — Trend 전략 고려.`}
       </p>
     </>
   )
 }
 
-interface AutopilotStatus {
+/* ── Types ─────────────────────────────────────────────────────── */
+
+interface EngineStatus {
   running: boolean
   reason: string
+  profile: string
   symbol: string
-  max_usdt: number
-  max_leverage: number
+  active_symbols: string[]
+  equity: number
+  peak_equity: number
+  gross_exposure: number
+  universe_size: number
 }
 
 interface ActivityItem {
@@ -38,48 +48,61 @@ interface ActivityItem {
   message: string
 }
 
+/* ── Main Component ────────────────────────────────────────────── */
+
 export function AutopilotTab() {
-  const [status, setStatus] = useState<AutopilotStatus | null>(null)
+  const [status, setStatus] = useState<EngineStatus | null>(null)
   const [activity, setActivity] = useState<ActivityItem[]>([])
+  const [portfolio, setPortfolio] = useState<PortfolioItem[]>([])
   const [marketRegime, setMarketRegime] = useState<MarketRegimeResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [activityMode, setActivityMode] = useState<'all' | 'live'>('all')
   const formDirtyRef = useRef(false)
+
+  // New engine config form
   const [form, setForm] = useState({
-    strategy_mode: 'auto' as 'auto' | 'trend' | 'range',
-    rsi_oversold: 30,
+    profile: 'balanced' as string,
+    signal_tf: '1d' as string,
+    deadzone_threshold: 0.10,
+    vol_window: 60,
+    target_portfolio_vol: 0.10,
+    effective_leverage_target: 1.0,
+    stop_k: 2.0,
+    execution_tick_sec: 120,
+    entry_order_mode: 'IOC_LIMIT' as string,
+    top_k_enabled: true,
+    top_k: 5,
+    min_weight_floor: 0.02,
+    max_weight_cap: 0.40,
+    rsi_period: 14,
     rsi_overbought: 70,
-    max_usdt: 1000,
-    max_leverage: 5,
-    daily_loss_limit_usdt: 0,
-    reentry_cooldown_minutes: 15,
+    rsi_oversold: 30,
+    funding_scale_enabled: false,
+    universe_top_n: 20,
+    listing_age_days: 90,
+    max_spread_pct: 0.15,
+    drawdown_kill_pct: 0.10,
     symbol: 'BTCUSDT',
-    entry_tf: '15m',
-    trend_tf: '1h',
-    entry_type: 'limit' as 'limit' | 'market',
-    price_filter_atr_mult: 0.3,
-    limit_offset_atr_mult: 0.15,
-    limit_ttl_minutes: 15,
-    allow_position_flip: true,
-    flip_fee_bps: 8,
-    flip_slippage_bps: 5,
-    flip_min_edge_ratio: 1.5,
   })
 
   const load = async () => {
     try {
       setError(null)
-      const [s, c, a] = await Promise.all([
+      const [s, c, a, p] = await Promise.all([
         api.autopilot.status(),
         api.autopilot.config(),
         api.autopilot.activity(100, activityMode),
+        api.autopilot.portfolio().catch(() => []),
       ])
-      setStatus(s)
+      setStatus(s as unknown as EngineStatus)
       setActivity(Array.isArray(a) ? a : [])
+      setPortfolio(Array.isArray(p) ? p : [])
+
       if (!formDirtyRef.current) {
         setForm((prev) => applyConfigToForm(c as Record<string, unknown>, prev))
       }
+
       const symbol = (c && typeof c === 'object' && (c as Record<string, unknown>).symbol)
         ? String((c as Record<string, unknown>).symbol)
         : 'BTCUSDT'
@@ -122,51 +145,35 @@ export function AutopilotTab() {
 
   const applyConfigToForm = (config: Record<string, unknown>, prev: typeof form) => ({
     ...prev,
-    strategy_mode: (['auto', 'trend', 'range'].includes(config.strategy_mode) ? config.strategy_mode : 'auto') as 'auto' | 'trend' | 'range',
-    rsi_oversold: Number(config.rsi_oversold ?? prev.rsi_oversold ?? 30),
-    rsi_overbought: Number(config.rsi_overbought ?? prev.rsi_overbought ?? 70),
-    max_usdt: Number(config.max_usdt ?? prev.max_usdt),
-    max_leverage: Number(config.max_leverage ?? prev.max_leverage),
-    daily_loss_limit_usdt: Number(config.daily_loss_limit_usdt ?? prev.daily_loss_limit_usdt),
-    reentry_cooldown_minutes: Number(config.reentry_cooldown_minutes ?? prev.reentry_cooldown_minutes ?? 15),
+    profile: String(config.profile ?? prev.profile),
+    signal_tf: String(config.signal_tf ?? prev.signal_tf),
+    deadzone_threshold: Number(config.deadzone_threshold ?? prev.deadzone_threshold),
+    vol_window: Number(config.vol_window ?? prev.vol_window),
+    target_portfolio_vol: Number(config.target_portfolio_vol ?? prev.target_portfolio_vol),
+    effective_leverage_target: Number(config.effective_leverage_target ?? prev.effective_leverage_target),
+    stop_k: Number(config.stop_k ?? prev.stop_k),
+    execution_tick_sec: Number(config.execution_tick_sec ?? prev.execution_tick_sec),
+    entry_order_mode: String(config.entry_order_mode ?? prev.entry_order_mode),
+    top_k_enabled: Boolean(config.top_k_enabled ?? prev.top_k_enabled),
+    top_k: Number(config.top_k ?? prev.top_k),
+    min_weight_floor: Number(config.min_weight_floor ?? prev.min_weight_floor),
+    max_weight_cap: Number(config.max_weight_cap ?? prev.max_weight_cap),
+    rsi_period: Number(config.rsi_period ?? prev.rsi_period),
+    rsi_overbought: Number(config.rsi_overbought ?? prev.rsi_overbought),
+    rsi_oversold: Number(config.rsi_oversold ?? prev.rsi_oversold),
+    funding_scale_enabled: Boolean(config.funding_scale_enabled ?? prev.funding_scale_enabled),
+    universe_top_n: Number(config.universe_top_n ?? prev.universe_top_n),
+    listing_age_days: Number(config.listing_age_days ?? prev.listing_age_days),
+    max_spread_pct: Number(config.max_spread_pct ?? prev.max_spread_pct),
+    drawdown_kill_pct: Number(config.drawdown_kill_pct ?? prev.drawdown_kill_pct),
     symbol: String(config.symbol ?? prev.symbol),
-    entry_tf: String(config.entry_tf ?? prev.entry_tf),
-    trend_tf: String(config.trend_tf ?? prev.trend_tf),
-    entry_type: (['limit', 'market'].includes(String(config.entry_type)) ? String(config.entry_type) : prev.entry_type) as 'limit' | 'market',
-    price_filter_atr_mult: Number(config.price_filter_atr_mult ?? prev.price_filter_atr_mult),
-    limit_offset_atr_mult: Number(config.limit_offset_atr_mult ?? prev.limit_offset_atr_mult),
-    limit_ttl_minutes: Number(config.limit_ttl_minutes ?? prev.limit_ttl_minutes),
-    allow_position_flip: Boolean(config.allow_position_flip ?? prev.allow_position_flip),
-    flip_fee_bps: Number(config.flip_fee_bps ?? prev.flip_fee_bps),
-    flip_slippage_bps: Number(config.flip_slippage_bps ?? prev.flip_slippage_bps),
-    flip_min_edge_ratio: Number(config.flip_min_edge_ratio ?? prev.flip_min_edge_ratio),
   })
 
   const handleSaveConfig = async () => {
     setSaving(true)
     try {
       setError(null)
-      const reentry = Math.max(0, Math.min(1440, Math.round(Number(form.reentry_cooldown_minutes)) || 0))
-      const res = await api.autopilot.putConfig({
-        strategy_mode: form.strategy_mode,
-        rsi_oversold: form.rsi_oversold,
-        rsi_overbought: form.rsi_overbought,
-        max_usdt: form.max_usdt,
-        max_leverage: form.max_leverage,
-        daily_loss_limit_usdt: form.daily_loss_limit_usdt,
-        reentry_cooldown_minutes: reentry,
-        symbol: form.symbol,
-        entry_tf: form.entry_tf,
-        trend_tf: form.trend_tf,
-        entry_type: form.entry_type,
-        price_filter_atr_mult: form.price_filter_atr_mult,
-        limit_offset_atr_mult: form.limit_offset_atr_mult,
-        limit_ttl_minutes: form.limit_ttl_minutes,
-        allow_position_flip: form.allow_position_flip,
-        flip_fee_bps: form.flip_fee_bps,
-        flip_slippage_bps: form.flip_slippage_bps,
-        flip_min_edge_ratio: form.flip_min_edge_ratio,
-      })
+      const res = await api.autopilot.putConfig({ ...form })
       formDirtyRef.current = false
       if (res.config && typeof res.config === 'object') {
         setForm((prev) => applyConfigToForm(res.config as Record<string, unknown>, prev))
@@ -179,323 +186,295 @@ export function AutopilotTab() {
     }
   }
 
+  const setField = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => {
+    formDirtyRef.current = true
+    setForm((f) => ({ ...f, [key]: value }))
+  }
+
   return (
     <div className="richman-tab">
       {error && <p className="richman-error">{error}</p>}
+
+      {/* ── Hero: Status + Regime ───────────────────────────── */}
       <div className="richman-hero">
-        <div className="richman-mascot" aria-hidden>
-          <img src="/richman-character.png" alt="Rich Man" className="richman-character-img" />
-        </div>
         <div className="richman-status-card">
-          <h3>Status</h3>
+          <h3>TSMOM Engine</h3>
           <p className={status?.running ? 'status-running' : 'status-stopped'}>
             {status?.running ? 'Running' : 'Stopped'}
-            {status?.reason ? ` (${status.reason})` : ''}
+            {status?.reason ? ` — ${status.reason}` : ''}
           </p>
+          {status && (
+            <div className="engine-stats">
+              <span>Profile: <strong>{status.profile}</strong></span>
+              <span>Equity: <strong>${status.equity.toLocaleString()}</strong></span>
+              <span>Exposure: <strong>${status.gross_exposure.toLocaleString()}</strong></span>
+              <span>Universe: <strong>{status.universe_size}</strong></span>
+              <span>Active: <strong>{status.active_symbols?.length ?? 0}</strong></span>
+            </div>
+          )}
           <div className="richman-actions">
             <button type="button" className="btn-start" onClick={handleStart} disabled={status?.running === true}>
-              Start
+              Start Engine
             </button>
             <button type="button" className="btn-stop" onClick={handleStop} disabled={!status?.running}>
-              Stop
+              Stop Engine
             </button>
           </div>
         </div>
         {marketRegime ? (
           <>
             <div className="richman-regime-card">
-              <h3>Market regime — 1D (큰 시야) · {marketRegime.symbol}</h3>
+              <h3>Market Regime — 1D (큰 시야) · {marketRegime.symbol}</h3>
               <RegimeBlock tf={marketRegime['1d']} />
             </div>
             <div className="richman-regime-card">
-              <h3>Market regime — 1h (세부) · {marketRegime.symbol}</h3>
+              <h3>Market Regime — 1h (세부) · {marketRegime.symbol}</h3>
               <RegimeBlock tf={marketRegime['1h']} />
             </div>
           </>
         ) : (
           <div className="richman-regime-card">
-            <h3>Market regime</h3>
+            <h3>Market Regime</h3>
             <p className="regime-unknown">로딩 중…</p>
           </div>
         )}
       </div>
+
+      {/* ── Portfolio section (NEW) ─────────────────────────── */}
+      {portfolio.length > 0 && (
+        <div className="engine-portfolio">
+          <h3>Portfolio</h3>
+          <div className="portfolio-table-wrap">
+            <table className="portfolio-table">
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Side</th>
+                  <th>Weight</th>
+                  <th>Target Qty</th>
+                  <th>Notional</th>
+                  <th>TrendScore</th>
+                  <th>RSI</th>
+                  <th>Funding</th>
+                </tr>
+              </thead>
+              <tbody>
+                {portfolio.map((p) => (
+                  <tr key={p.symbol} className={`portfolio-row portfolio-row--${p.side.toLowerCase()}`}>
+                    <td>{p.symbol}</td>
+                    <td className={p.side === 'LONG' ? 'side-long' : 'side-short'}>{p.side}</td>
+                    <td>{(p.weight * 100).toFixed(1)}%</td>
+                    <td>{p.target_qty.toFixed(6)}</td>
+                    <td>${p.target_notional.toLocaleString()}</td>
+                    <td className={p.trend_score > 0 ? 'ts-positive' : p.trend_score < 0 ? 'ts-negative' : ''}>
+                      {p.trend_score.toFixed(4)}
+                    </td>
+                    <td>{p.rsi?.toFixed(1) ?? '—'}</td>
+                    <td>{p.funding_rate != null ? (p.funding_rate * 100).toFixed(4) + '%' : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ── Settings ────────────────────────────────────────── */}
       <div className="richman-top">
         <div className="richman-config-card">
-          <h3>Settings</h3>
+          <h3>Engine Settings</h3>
           <div className="config-sections">
+
+            {/* Profile */}
             <section className="config-section">
-              <h4>Strategy / Market mode</h4>
+              <h4>Profile</h4>
               <div className="config-row">
                 <label>
-                  <span>Mode</span>
+                  <span>Profile</span>
                   <select
-                    value={form.strategy_mode}
-                    onChange={(e) => {
-                      formDirtyRef.current = true
-                      setForm((f) => ({ ...f, strategy_mode: e.target.value as 'auto' | 'trend' | 'range' }))
-                    }}
+                    value={form.profile}
+                    onChange={(e) => setField('profile', e.target.value)}
                   >
-                    <option value="auto">Auto (1h 기준) — 자동 선택</option>
-                    <option value="trend">Trend (추세) — 추세 추종 (수동)</option>
-                    <option value="range">Range (횡보) — RSI 평균 회귀 (수동)</option>
+                    <option value="conservative">Conservative (보수적)</option>
+                    <option value="balanced">Balanced (균형)</option>
+                    <option value="aggressive">Aggressive (공격적)</option>
+                    <option value="custom">Custom (사용자 정의)</option>
                   </select>
                 </label>
-                {(form.strategy_mode === 'range' || form.strategy_mode === 'auto') && (
-                  <>
-                    <label>
-                      <span>RSI 과매도 (롱 진입)</span>
-                      <input
-                        type="number"
-                        min={0}
-                        max={100}
-                        value={form.rsi_oversold}
-                        onChange={(e) => {
-                          formDirtyRef.current = true
-                          setForm((f) => ({ ...f, rsi_oversold: Number(e.target.value) || 30 }))
-                        }}
-                      />
-                    </label>
-                    <label>
-                      <span>RSI 과매수 (숏 진입)</span>
-                      <input
-                        type="number"
-                        min={0}
-                        max={100}
-                        value={form.rsi_overbought}
-                        onChange={(e) => {
-                          formDirtyRef.current = true
-                          setForm((f) => ({ ...f, rsi_overbought: Number(e.target.value) || 70 }))
-                        }}
-                      />
-                    </label>
-                  </>
-                )}
-              </div>
-            </section>
-            <section className="config-section">
-              <h4>Capital / Leverage</h4>
-              <div className="config-row">
                 <label>
-                  <span>Max USDT</span>
-                  <input
-                    type="number"
-                    min={0}
-                    step={100}
-                    value={form.max_usdt}
-                    onChange={(e) => { formDirtyRef.current = true; setForm((f) => ({ ...f, max_usdt: Number(e.target.value) || 0 })) }}
-                  />
-                </label>
-                <label>
-                  <span>Max Leverage</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={125}
-                    value={form.max_leverage}
-                    onChange={(e) => { formDirtyRef.current = true; setForm((f) => ({ ...f, max_leverage: Number(e.target.value) || 1 })) }}
-                  />
-                </label>
-              </div>
-            </section>
-            <section className="config-section">
-              <h4>Entry Order</h4>
-              <div className="config-row">
-                <label>
-                  <span>Entry Type</span>
+                  <span>Signal TF</span>
                   <select
-                    value={form.entry_type}
-                    onChange={(e) => {
-                      formDirtyRef.current = true
-                      setForm((f) => ({ ...f, entry_type: e.target.value as 'limit' | 'market' }))
-                    }}
+                    value={form.signal_tf}
+                    onChange={(e) => setField('signal_tf', e.target.value)}
                   >
-                    <option value="limit">Limit (가격필터 + 지정가)</option>
-                    <option value="market">Market (즉시 시장가)</option>
+                    <option value="1d">1D (일봉)</option>
+                    <option value="4h">4H (4시간봉)</option>
                   </select>
                 </label>
-                {form.entry_type === 'limit' && (
-                  <>
-                    <label>
-                      <span>Price Filter (ATR x)</span>
-                      <input
-                        type="number"
-                        min={0}
-                        max={2}
-                        step={0.05}
-                        value={form.price_filter_atr_mult}
-                        onChange={(e) => { formDirtyRef.current = true; setForm((f) => ({ ...f, price_filter_atr_mult: Number(e.target.value) || 0 })) }}
-                      />
-                    </label>
-                    <label>
-                      <span>Limit Offset (ATR x)</span>
-                      <input
-                        type="number"
-                        min={0}
-                        max={1}
-                        step={0.05}
-                        value={form.limit_offset_atr_mult}
-                        onChange={(e) => { formDirtyRef.current = true; setForm((f) => ({ ...f, limit_offset_atr_mult: Number(e.target.value) || 0 })) }}
-                      />
-                    </label>
-                    <label>
-                      <span>Limit TTL (분)</span>
-                      <input
-                        type="number"
-                        min={1}
-                        max={120}
-                        value={form.limit_ttl_minutes}
-                        onChange={(e) => { formDirtyRef.current = true; setForm((f) => ({ ...f, limit_ttl_minutes: Math.max(1, Number(e.target.value) || 15) })) }}
-                      />
-                    </label>
-                  </>
-                )}
-              </div>
-              {form.entry_type === 'limit' && (
-                <table className="entry-ref-table">
-                  <thead>
-                    <tr>
-                      <th>설정</th>
-                      <th>보수적 (체결 우선)</th>
-                      <th>균형 (추천)</th>
-                      <th>공격적 (가격 우선)</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr>
-                      <td>Price Filter</td>
-                      <td>0.4</td>
-                      <td><strong>0.3</strong></td>
-                      <td>0.2</td>
-                    </tr>
-                    <tr>
-                      <td>Limit Offset</td>
-                      <td>0.08</td>
-                      <td><strong>0.15</strong></td>
-                      <td>0.2</td>
-                    </tr>
-                    <tr>
-                      <td>TTL (분)</td>
-                      <td>20</td>
-                      <td><strong>15</strong></td>
-                      <td>10</td>
-                    </tr>
-                  </tbody>
-                </table>
-              )}
-            </section>
-            <section className="config-section">
-              <h4>Loss Limit &amp; Reentry</h4>
-              <div className="config-row">
                 <label>
-                  <span>Daily Loss Limit (USDT, 0=off)</span>
-                  <input
-                    type="number"
-                    min={0}
-                    value={form.daily_loss_limit_usdt}
-                    onChange={(e) => { formDirtyRef.current = true; setForm((f) => ({ ...f, daily_loss_limit_usdt: Number(e.target.value) || 0 })) }}
-                  />
-                </label>
-                <label>
-                  <span>Reentry cooldown (min, 0=immediate)</span>
-                  <input
-                    type="number"
-                    min={0}
-                    max={1440}
-                    value={form.reentry_cooldown_minutes}
-                    onChange={(e) => { formDirtyRef.current = true; setForm((f) => ({ ...f, reentry_cooldown_minutes: Number(e.target.value) || 0 })) }}
-                  />
-                </label>
-              </div>
-            </section>
-            <section className="config-section">
-              <h4>Trading</h4>
-              <div className="config-row config-row--three">
-                <label>
-                  <span>Symbol</span>
+                  <span>Default Symbol</span>
                   <input
                     type="text"
                     value={form.symbol}
-                    onChange={(e) => { formDirtyRef.current = true; setForm((f) => ({ ...f, symbol: e.target.value.toUpperCase() })) }}
-                  />
-                </label>
-                <label>
-                  <span>Entry TF</span>
-                  <input
-                    type="text"
-                    value={form.entry_tf}
-                    onChange={(e) => { formDirtyRef.current = true; setForm((f) => ({ ...f, entry_tf: e.target.value })) }}
-                  />
-                </label>
-                <label>
-                  <span>Trend TF</span>
-                  <input
-                    type="text"
-                    value={form.trend_tf}
-                    onChange={(e) => { formDirtyRef.current = true; setForm((f) => ({ ...f, trend_tf: e.target.value })) }}
+                    onChange={(e) => setField('symbol', e.target.value.toUpperCase())}
                   />
                 </label>
               </div>
             </section>
-            <section className="config-section config-section--flip">
-              <h4 className="config-subtitle">Position flip (opposite signal)</h4>
-              <label className="config-checkbox">
-                <input
-                  type="checkbox"
-                  checked={form.allow_position_flip}
-                  onChange={(e) => { formDirtyRef.current = true; setForm((f) => ({ ...f, allow_position_flip: e.target.checked })) }}
-                />
-                <span>Allow flip when opposite signal (only if cost &lt; upside)</span>
-              </label>
-              {form.allow_position_flip && (
-                <div className="config-flip-extra">
-                  <div className="config-row">
-                    <label>
-                      <span>Fee (bps per leg)</span>
-                      <input
-                        type="number"
-                        min={0}
-                        max={100}
-                        step={0.5}
-                        value={form.flip_fee_bps}
-                        onChange={(e) => { formDirtyRef.current = true; setForm((f) => ({ ...f, flip_fee_bps: Number(e.target.value) || 0 })) }}
-                      />
-                    </label>
-                    <label>
-                      <span>Slippage (bps per leg)</span>
-                      <input
-                        type="number"
-                        min={0}
-                        max={100}
-                        step={0.5}
-                        value={form.flip_slippage_bps}
-                        onChange={(e) => { formDirtyRef.current = true; setForm((f) => ({ ...f, flip_slippage_bps: Number(e.target.value) || 0 })) }}
-                      />
-                    </label>
-                    <label>
-                      <span>Min edge ratio (upside vs cost)</span>
-                      <input
-                        type="number"
-                        min={0.5}
-                        max={10}
-                        step={0.1}
-                        value={form.flip_min_edge_ratio}
-                        onChange={(e) => { formDirtyRef.current = true; setForm((f) => ({ ...f, flip_min_edge_ratio: Number(e.target.value) || 0 })) }}
-                      />
-                    </label>
-                  </div>
-                </div>
-              )}
+
+            {/* Signal */}
+            <section className="config-section">
+              <h4>Signal</h4>
+              <div className="config-row">
+                <label>
+                  <span>Deadzone</span>
+                  <input type="number" min={0} max={1} step={0.01} value={form.deadzone_threshold}
+                    onChange={(e) => setField('deadzone_threshold', Number(e.target.value) || 0)} />
+                </label>
+                <label>
+                  <span>RSI Period</span>
+                  <input type="number" min={5} max={50} value={form.rsi_period}
+                    onChange={(e) => setField('rsi_period', Number(e.target.value) || 14)} />
+                </label>
+                <label>
+                  <span>RSI 과매수</span>
+                  <input type="number" min={50} max={100} value={form.rsi_overbought}
+                    onChange={(e) => setField('rsi_overbought', Number(e.target.value) || 70)} />
+                </label>
+                <label>
+                  <span>RSI 과매도</span>
+                  <input type="number" min={0} max={50} value={form.rsi_oversold}
+                    onChange={(e) => setField('rsi_oversold', Number(e.target.value) || 30)} />
+                </label>
+              </div>
+              <div className="config-row">
+                <label className="config-checkbox">
+                  <input type="checkbox" checked={form.funding_scale_enabled}
+                    onChange={(e) => setField('funding_scale_enabled', e.target.checked)} />
+                  <span>Funding Rate 오버레이 활성화</span>
+                </label>
+              </div>
+            </section>
+
+            {/* Sizing */}
+            <section className="config-section">
+              <h4>Sizing / Risk</h4>
+              <div className="config-row">
+                <label>
+                  <span>Target Vol (연율)</span>
+                  <input type="number" min={0.01} max={1} step={0.01} value={form.target_portfolio_vol}
+                    onChange={(e) => setField('target_portfolio_vol', Number(e.target.value) || 0.1)} />
+                </label>
+                <label>
+                  <span>Leverage Target</span>
+                  <input type="number" min={0.1} max={10} step={0.1} value={form.effective_leverage_target}
+                    onChange={(e) => setField('effective_leverage_target', Number(e.target.value) || 1)} />
+                </label>
+                <label>
+                  <span>Vol Window (days)</span>
+                  <input type="number" min={10} max={365} value={form.vol_window}
+                    onChange={(e) => setField('vol_window', Number(e.target.value) || 60)} />
+                </label>
+                <label>
+                  <span>Stop K (ATR x)</span>
+                  <input type="number" min={0.5} max={10} step={0.1} value={form.stop_k}
+                    onChange={(e) => setField('stop_k', Number(e.target.value) || 2)} />
+                </label>
+              </div>
+              <div className="config-row">
+                <label>
+                  <span>Drawdown Kill (%)</span>
+                  <input type="number" min={1} max={100} step={1}
+                    value={Math.round(form.drawdown_kill_pct * 100)}
+                    onChange={(e) => setField('drawdown_kill_pct', (Number(e.target.value) || 10) / 100)} />
+                </label>
+              </div>
+            </section>
+
+            {/* Top-K */}
+            <section className="config-section">
+              <h4>Top-K Concentration</h4>
+              <div className="config-row">
+                <label className="config-checkbox">
+                  <input type="checkbox" checked={form.top_k_enabled}
+                    onChange={(e) => setField('top_k_enabled', e.target.checked)} />
+                  <span>Top-K 활성화</span>
+                </label>
+                <label>
+                  <span>K (최대 포지션 수)</span>
+                  <input type="number" min={1} max={50} value={form.top_k}
+                    onChange={(e) => setField('top_k', Number(e.target.value) || 5)} />
+                </label>
+                <label>
+                  <span>Min Weight (%)</span>
+                  <input type="number" min={0} max={50} step={1}
+                    value={Math.round(form.min_weight_floor * 100)}
+                    onChange={(e) => setField('min_weight_floor', (Number(e.target.value) || 2) / 100)} />
+                </label>
+                <label>
+                  <span>Max Weight (%)</span>
+                  <input type="number" min={5} max={100} step={1}
+                    value={Math.round(form.max_weight_cap * 100)}
+                    onChange={(e) => setField('max_weight_cap', (Number(e.target.value) || 40) / 100)} />
+                </label>
+              </div>
+            </section>
+
+            {/* Execution */}
+            <section className="config-section">
+              <h4>Execution</h4>
+              <div className="config-row">
+                <label>
+                  <span>Order Mode</span>
+                  <select value={form.entry_order_mode}
+                    onChange={(e) => setField('entry_order_mode', e.target.value)}>
+                    <option value="IOC_LIMIT">IOC Limit</option>
+                    <option value="POST_ONLY_LIMIT">Post-Only Limit</option>
+                    <option value="MARKET">Market</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Exec Tick (초)</span>
+                  <input type="number" min={60} max={300} value={form.execution_tick_sec}
+                    onChange={(e) => setField('execution_tick_sec', Number(e.target.value) || 120)} />
+                </label>
+              </div>
+            </section>
+
+            {/* Universe */}
+            <section className="config-section">
+              <h4>Universe</h4>
+              <div className="config-row">
+                <label>
+                  <span>Top N (24h Volume)</span>
+                  <input type="number" min={1} max={200} value={form.universe_top_n}
+                    onChange={(e) => setField('universe_top_n', Number(e.target.value) || 20)} />
+                </label>
+                <label>
+                  <span>Min Listing Age (days)</span>
+                  <input type="number" min={0} max={3650} value={form.listing_age_days}
+                    onChange={(e) => setField('listing_age_days', Number(e.target.value) || 90)} />
+                </label>
+                <label>
+                  <span>Max Spread (%)</span>
+                  <input type="number" min={0} max={5} step={0.01} value={form.max_spread_pct}
+                    onChange={(e) => setField('max_spread_pct', Number(e.target.value) || 0.15)} />
+                </label>
+              </div>
             </section>
           </div>
+
           <div className="config-footer">
             <button type="button" className="btn-save" onClick={handleSaveConfig} disabled={saving}>
-              {saving ? 'Saving...' : 'Save config'}
+              {saving ? 'Saving...' : 'Save Config'}
             </button>
           </div>
         </div>
       </div>
+
+      {/* ── Activity Log ───────────────────────────────────── */}
       <div className="richman-activity">
-        <h3>Activity log</h3>
+        <h3>Activity Log</h3>
         <div className="activity-filters">
           <span className="activity-filter-label">Show:</span>
           {(['all', 'live'] as const).map((m) => (
