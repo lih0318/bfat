@@ -318,7 +318,7 @@ export function AutopilotTab() {
                   </select>
                 </label>
                 <label>
-                  <span>Default Symbol <Tip text="Market Regime 표시 및 단일 심볼 모드에서 사용할 기본 심볼. 예: BTCUSDT, ETHUSDT." /></span>
+                  <span>Default Symbol <Tip text="Market Regime 카드에 표시할 심볼. 실제 거래 심볼은 Universe에서 자동 선정되므로, 이 값은 거래에 영향을 주지 않습니다." /></span>
                   <input
                     type="text"
                     value={form.symbol}
