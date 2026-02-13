@@ -2,6 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import { api, type MarketRegimeResponse, type RegimeTf, type PortfolioItem, type SignalItem } from '../api/client'
 import './AutopilotTab.css'
 
+/* ── Tooltip helper ────────────────────────────────────────────── */
+
+function Tip({ text }: { text: string }) {
+  return <span className="config-tip" data-tip={text}>?</span>
+}
+
 /* ── Regime Block (backward compat) ────────────────────────────── */
 
 function RegimeBlock({ tf }: { tf: RegimeTf }) {
@@ -290,7 +296,7 @@ export function AutopilotTab() {
               <h4>Profile</h4>
               <div className="config-row">
                 <label>
-                  <span>Profile</span>
+                  <span>Profile <Tip text="프리셋 선택. Conservative=낮은 변동성/레버리지, Balanced=중간, Aggressive=높은 변동성/빠른 실행. Custom은 수동 설정." /></span>
                   <select
                     value={form.profile}
                     onChange={(e) => setField('profile', e.target.value)}
@@ -302,7 +308,7 @@ export function AutopilotTab() {
                   </select>
                 </label>
                 <label>
-                  <span>Signal TF</span>
+                  <span>Signal TF <Tip text="시그널(TrendScore) 계산에 사용할 타임프레임. 1D=일봉 기준(느리지만 안정적), 4H=4시간봉(빠른 반응)." /></span>
                   <select
                     value={form.signal_tf}
                     onChange={(e) => setField('signal_tf', e.target.value)}
@@ -312,7 +318,7 @@ export function AutopilotTab() {
                   </select>
                 </label>
                 <label>
-                  <span>Default Symbol</span>
+                  <span>Default Symbol <Tip text="Market Regime 표시 및 단일 심볼 모드에서 사용할 기본 심볼. 예: BTCUSDT, ETHUSDT." /></span>
                   <input
                     type="text"
                     value={form.symbol}
@@ -327,22 +333,22 @@ export function AutopilotTab() {
               <h4>Signal</h4>
               <div className="config-row">
                 <label>
-                  <span>Deadzone</span>
+                  <span>Deadzone <Tip text="TrendScore의 절대값이 이 값보다 작으면 포지션을 잡지 않습니다 (노이즈 필터). 높을수록 보수적. 기본 0.10." /></span>
                   <input type="number" min={0} max={1} step={0.01} value={form.deadzone_threshold}
                     onChange={(e) => setField('deadzone_threshold', Number(e.target.value) || 0)} />
                 </label>
                 <label>
-                  <span>RSI Period</span>
+                  <span>RSI Period <Tip text="RSI 계산에 사용할 봉 수. 일반적으로 14. 작을수록 민감, 클수록 둔감." /></span>
                   <input type="number" min={5} max={50} value={form.rsi_period}
                     onChange={(e) => setField('rsi_period', Number(e.target.value) || 14)} />
                 </label>
                 <label>
-                  <span>RSI 과매수</span>
+                  <span>RSI 과매수 <Tip text="RSI가 이 값 이상이면 롱 포지션 크기를 축소합니다. 기본 70. 높을수록 기준이 느슨." /></span>
                   <input type="number" min={50} max={100} value={form.rsi_overbought}
                     onChange={(e) => setField('rsi_overbought', Number(e.target.value) || 70)} />
                 </label>
                 <label>
-                  <span>RSI 과매도</span>
+                  <span>RSI 과매도 <Tip text="RSI가 이 값 이하이면 롱 포지션 크기를 확대합니다. 기본 30. 낮을수록 기준이 느슨." /></span>
                   <input type="number" min={0} max={50} value={form.rsi_oversold}
                     onChange={(e) => setField('rsi_oversold', Number(e.target.value) || 30)} />
                 </label>
@@ -351,7 +357,7 @@ export function AutopilotTab() {
                 <label className="config-checkbox">
                   <input type="checkbox" checked={form.funding_scale_enabled}
                     onChange={(e) => setField('funding_scale_enabled', e.target.checked)} />
-                  <span>Funding Rate 오버레이 활성화</span>
+                  <span>Funding Rate 오버레이 활성화 <Tip text="활성화 시, 높은 펀딩비가 포지션 방향과 반대면 크기를 축소합니다. 펀딩비 비용을 고려한 리스크 관리." /></span>
                 </label>
               </div>
             </section>
@@ -361,29 +367,29 @@ export function AutopilotTab() {
               <h4>Sizing / Risk</h4>
               <div className="config-row">
                 <label>
-                  <span>Target Vol (연율)</span>
+                  <span>Target Vol (연율) <Tip text="포트폴리오 전체의 연간 목표 변동성. 예: 0.10 = 연 10%. 높을수록 공격적 사이징, 낮을수록 보수적." /></span>
                   <input type="number" min={0.01} max={1} step={0.01} value={form.target_portfolio_vol}
                     onChange={(e) => setField('target_portfolio_vol', Number(e.target.value) || 0.1)} />
                 </label>
                 <label>
-                  <span>Leverage Target</span>
+                  <span>Leverage Target <Tip text="소프트 레버리지 상한. 총 노출(gross notional)이 자본 × 이 배수를 초과하지 않도록 제한. 예: 1.0 = 1배." /></span>
                   <input type="number" min={0.1} max={10} step={0.1} value={form.effective_leverage_target}
                     onChange={(e) => setField('effective_leverage_target', Number(e.target.value) || 1)} />
                 </label>
                 <label>
-                  <span>Vol Window (days)</span>
+                  <span>Vol Window (days) <Tip text="실현변동성(realized vol) 계산에 사용할 일수. 길수록 안정적이지만 최근 변화 반영이 느림. 기본 60일." /></span>
                   <input type="number" min={10} max={365} value={form.vol_window}
                     onChange={(e) => setField('vol_window', Number(e.target.value) || 60)} />
                 </label>
                 <label>
-                  <span>Stop K (ATR x)</span>
+                  <span>Stop K (ATR x) <Tip text="손절가 거리 = K × ATR. 클수록 넓은 손절(변동 허용), 작을수록 타이트한 손절. 기본 2.0." /></span>
                   <input type="number" min={0.5} max={10} step={0.1} value={form.stop_k}
                     onChange={(e) => setField('stop_k', Number(e.target.value) || 2)} />
                 </label>
               </div>
               <div className="config-row">
                 <label>
-                  <span>Drawdown Kill (%)</span>
+                  <span>Drawdown Kill (%) <Tip text="고점 대비 이 비율 이상 하락하면 엔진이 자동 정지됩니다. 예: 10 = 고점 대비 10% 하락 시 정지. 자본 보호 장치." /></span>
                   <input type="number" min={1} max={100} step={1}
                     value={Math.round(form.drawdown_kill_pct * 100)}
                     onChange={(e) => setField('drawdown_kill_pct', (Number(e.target.value) || 10) / 100)} />
@@ -398,21 +404,21 @@ export function AutopilotTab() {
                 <label className="config-checkbox">
                   <input type="checkbox" checked={form.top_k_enabled}
                     onChange={(e) => setField('top_k_enabled', e.target.checked)} />
-                  <span>Top-K 활성화</span>
+                  <span>Top-K 활성화 <Tip text="활성화 시, TrendScore가 가장 강한 상위 K개 심볼에만 집중 투자. 비활성화 시 전체 유니버스에 분산." /></span>
                 </label>
                 <label>
-                  <span>K (최대 포지션 수)</span>
+                  <span>K (최대 포지션 수) <Tip text="동시에 보유할 최대 포지션 수. 적을수록 집중 투자, 많을수록 분산. 기본 5." /></span>
                   <input type="number" min={1} max={50} value={form.top_k}
                     onChange={(e) => setField('top_k', Number(e.target.value) || 5)} />
                 </label>
                 <label>
-                  <span>Min Weight (%)</span>
+                  <span>Min Weight (%) <Tip text="심볼당 최소 비중. 이 비율 미만이면 해당 심볼 포지션을 잡지 않습니다 (너무 작은 포지션 방지). 기본 2%." /></span>
                   <input type="number" min={0} max={50} step={1}
                     value={Math.round(form.min_weight_floor * 100)}
                     onChange={(e) => setField('min_weight_floor', (Number(e.target.value) || 2) / 100)} />
                 </label>
                 <label>
-                  <span>Max Weight (%)</span>
+                  <span>Max Weight (%) <Tip text="심볼당 최대 비중. 단일 심볼 집중 위험을 방지합니다. 기본 40%." /></span>
                   <input type="number" min={5} max={100} step={1}
                     value={Math.round(form.max_weight_cap * 100)}
                     onChange={(e) => setField('max_weight_cap', (Number(e.target.value) || 40) / 100)} />
@@ -425,7 +431,7 @@ export function AutopilotTab() {
               <h4>Execution</h4>
               <div className="config-row">
                 <label>
-                  <span>Order Mode</span>
+                  <span>Order Mode <Tip text="주문 방식. IOC Limit=즉시체결 지정가(미체결분 취소), Post-Only=메이커 전용(수수료 절약), Market=즉시 시장가(빠른 체결)." /></span>
                   <select value={form.entry_order_mode}
                     onChange={(e) => setField('entry_order_mode', e.target.value)}>
                     <option value="IOC_LIMIT">IOC Limit</option>
@@ -434,7 +440,7 @@ export function AutopilotTab() {
                   </select>
                 </label>
                 <label>
-                  <span>Exec Tick (초)</span>
+                  <span>Exec Tick (초) <Tip text="실행 틱 간격(초). 이 주기마다 현재 포지션과 목표를 비교하여 주문을 실행. 짧을수록 빠른 반응이지만 API 사용량 증가. 기본 120초." /></span>
                   <input type="number" min={60} max={300} value={form.execution_tick_sec}
                     onChange={(e) => setField('execution_tick_sec', Number(e.target.value) || 120)} />
                 </label>
@@ -446,17 +452,17 @@ export function AutopilotTab() {
               <h4>Universe</h4>
               <div className="config-row">
                 <label>
-                  <span>Top N (24h Volume)</span>
+                  <span>Top N (24h Volume) <Tip text="24시간 거래량 기준 상위 N개 심볼만 거래 대상으로 선정. 높을수록 많은 심볼 포함. 기본 20." /></span>
                   <input type="number" min={1} max={200} value={form.universe_top_n}
                     onChange={(e) => setField('universe_top_n', Number(e.target.value) || 20)} />
                 </label>
                 <label>
-                  <span>Min Listing Age (days)</span>
+                  <span>Min Listing Age (days) <Tip text="바이낸스 상장 후 최소 경과 일수. 신규 상장 코인의 불안정성을 피하기 위한 필터. 기본 90일." /></span>
                   <input type="number" min={0} max={3650} value={form.listing_age_days}
                     onChange={(e) => setField('listing_age_days', Number(e.target.value) || 90)} />
                 </label>
                 <label>
-                  <span>Max Spread (%)</span>
+                  <span>Max Spread (%) <Tip text="매수/매도 호가 스프레드 허용 최대치(%). 이 이상이면 유동성 부족으로 거래 대상에서 제외. 기본 0.15%." /></span>
                   <input type="number" min={0} max={5} step={0.01} value={form.max_spread_pct}
                     onChange={(e) => setField('max_spread_pct', Number(e.target.value) || 0.15)} />
                 </label>

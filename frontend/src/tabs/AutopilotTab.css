@@ -475,6 +475,92 @@
   border-bottom: none;
 }
 
+/* ── Config Tooltip ────────────────────────────────────────────── */
+
+.config-tip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  margin-left: 5px;
+  font-size: 0.6rem;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 50%;
+  cursor: help;
+  position: relative;
+  vertical-align: middle;
+  flex-shrink: 0;
+  transition: color 0.2s, border-color 0.2s, background 0.2s;
+}
+
+.config-tip:hover {
+  color: var(--accent);
+  border-color: rgba(212, 168, 83, 0.5);
+  background: rgba(212, 168, 83, 0.1);
+}
+
+.config-tip::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: #151524;
+  color: #d0d2d6;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 0.73rem;
+  font-weight: 400;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  max-width: 280px;
+  min-width: 160px;
+  width: max-content;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.18s, visibility 0.18s;
+  z-index: 200;
+}
+
+.config-tip::before {
+  content: '';
+  position: absolute;
+  bottom: calc(100% + 2px);
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: rgba(255, 255, 255, 0.12);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.18s, visibility 0.18s;
+  z-index: 201;
+}
+
+.config-tip:hover::after,
+.config-tip:hover::before {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* When tooltip would overflow left edge, align left */
+.config-tip--left::after {
+  left: 0;
+  transform: translateX(0);
+}
+
+.config-tip--left::before {
+  left: 7px;
+  transform: translateX(0);
+}
+
 /* ── Engine stats (new) ────────────────────────────────────────── */
 
 .engine-stats {
