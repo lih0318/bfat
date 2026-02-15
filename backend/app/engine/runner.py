@@ -29,6 +29,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from app.engine.datafeed import fetch_closes, fetch_funding, fetch_vol_map, fetch_atr_map
 from app.engine.accounting import ledger
 from app.engine.config_model import EngineConfig, load_engine_config, save_engine_config
 from app.engine.datafeed import fetch_closes, fetch_funding, fetch_vol_map
