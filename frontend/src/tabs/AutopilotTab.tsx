@@ -362,7 +362,7 @@ export function AutopilotTab() {
             {/* Profile */}
             <section className="config-section">
               <h4>Profile</h4>
-              <div className="config-row">
+              <div className="config-row config-row--three">
                 <label>
                   <span>Profile <Tip text="프리셋 선택. Conservative=낮은 변동성/레버리지, Balanced=중간, Aggressive=높은 변동성/빠른 실행. Custom은 수동 설정." /></span>
                   <select
@@ -421,19 +421,17 @@ export function AutopilotTab() {
                     onChange={(e) => setField('rsi_oversold', Number(e.target.value) || 30)} />
                 </label>
               </div>
-              <div className="config-row">
-                <label className="config-checkbox">
-                  <input type="checkbox" checked={form.funding_scale_enabled}
-                    onChange={(e) => setField('funding_scale_enabled', e.target.checked)} />
-                  <span>Funding Rate 오버레이 활성화 <Tip text="활성화 시, 높은 펀딩비가 포지션 방향과 반대면 크기를 축소합니다. 펀딩비 비용을 고려한 리스크 관리." /></span>
-                </label>
-              </div>
+              <label className="config-checkbox">
+                <input type="checkbox" checked={form.funding_scale_enabled}
+                  onChange={(e) => setField('funding_scale_enabled', e.target.checked)} />
+                <span>Funding Rate 오버레이 활성화 <Tip text="활성화 시, 높은 펀딩비가 포지션 방향과 반대면 크기를 축소합니다. 펀딩비 비용을 고려한 리스크 관리." /></span>
+              </label>
             </section>
 
             {/* Sizing */}
             <section className="config-section">
               <h4>Sizing / Risk</h4>
-              <div className="config-row">
+              <div className="config-row config-row--three">
                 <label>
                   <span>Target Vol (연율) <Tip text="포트폴리오 전체의 연간 목표 변동성. 예: 0.10 = 연 10%. 높을수록 공격적 사이징, 낮을수록 보수적." /></span>
                   <input type="number" min={0.01} max={1} step={0.01} value={form.target_portfolio_vol}
@@ -449,13 +447,13 @@ export function AutopilotTab() {
                   <input type="number" min={10} max={365} value={form.vol_window}
                     onChange={(e) => setField('vol_window', Number(e.target.value) || 60)} />
                 </label>
+              </div>
+              <div className="config-row">
                 <label>
                   <span>Stop K (ATR x) <Tip text="손절가 거리 = K × ATR. 클수록 넓은 손절(변동 허용), 작을수록 타이트한 손절. 기본 2.0." /></span>
                   <input type="number" min={0.5} max={10} step={0.1} value={form.stop_k}
                     onChange={(e) => setField('stop_k', Number(e.target.value) || 2)} />
                 </label>
-              </div>
-              <div className="config-row">
                 <label>
                   <span>Drawdown Kill (%) <Tip text="고점 대비 이 비율 이상 하락하면 엔진이 자동 정지됩니다. 예: 10 = 고점 대비 10% 하락 시 정지. 자본 보호 장치." /></span>
                   <input type="number" min={1} max={100} step={1}
@@ -468,12 +466,12 @@ export function AutopilotTab() {
             {/* Top-K */}
             <section className="config-section">
               <h4>Top-K Concentration</h4>
-              <div className="config-row">
-                <label className="config-checkbox">
-                  <input type="checkbox" checked={form.top_k_enabled}
-                    onChange={(e) => setField('top_k_enabled', e.target.checked)} />
-                  <span>Top-K 활성화 <Tip text="활성화 시, TrendScore가 가장 강한 상위 K개 심볼에만 집중 투자. 비활성화 시 전체 유니버스에 분산." /></span>
-                </label>
+              <label className="config-checkbox">
+                <input type="checkbox" checked={form.top_k_enabled}
+                  onChange={(e) => setField('top_k_enabled', e.target.checked)} />
+                <span>Top-K 활성화 <Tip text="활성화 시, TrendScore가 가장 강한 상위 K개 심볼에만 집중 투자. 비활성화 시 전체 유니버스에 분산." /></span>
+              </label>
+              <div className="config-row config-row--three">
                 <label>
                   <span>K (최대 포지션 수) <Tip text="동시에 보유할 최대 포지션 수. 적을수록 집중 투자, 많을수록 분산. 기본 5." /></span>
                   <input type="number" min={1} max={50} value={form.top_k}
@@ -518,7 +516,7 @@ export function AutopilotTab() {
             {/* Universe */}
             <section className="config-section">
               <h4>Universe</h4>
-              <div className="config-row">
+              <div className="config-row config-row--three">
                 <label>
                   <span>Top N (24h Volume) <Tip text="24시간 거래량 기준 상위 N개 심볼만 거래 대상으로 선정. 높을수록 많은 심볼 포함. 기본 20." /></span>
                   <input type="number" min={1} max={200} value={form.universe_top_n}

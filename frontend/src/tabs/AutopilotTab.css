@@ -193,6 +193,9 @@
 }
 
 .config-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
   padding-bottom: 1.25rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
@@ -208,7 +211,7 @@
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--accent);
-  margin: 0 0 0.75rem 0;
+  margin: 0;
 }
 
 .config-row {
@@ -279,9 +282,6 @@
 
   .config-section label span {
     font-size: 0.8rem;
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
   }
 
   .config-section input[type="number"],
@@ -293,9 +293,7 @@
   }
 
   .config-checkbox {
-    flex-direction: row !important;
-    align-items: center !important;
-    gap: 0.5rem !important;
+    padding: 0.55rem 0.75rem;
   }
 
   .config-footer {
@@ -350,9 +348,12 @@
 }
 
 .config-section label span {
-  font-size: 0.75rem;
+  font-size: 0.78rem;
   font-weight: 500;
   color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
 }
 
 .config-section input[type="number"],
@@ -387,19 +388,36 @@
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
+  gap: 0.6rem;
+  flex-wrap: nowrap;
+  padding: 0.6rem 0.85rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.config-checkbox:hover {
+  border-color: rgba(212, 168, 83, 0.4);
+  background: rgba(212, 168, 83, 0.04);
 }
 
 .config-checkbox input[type="checkbox"] {
-  width: 1rem;
-  height: 1rem;
+  width: 1.05rem;
+  height: 1.05rem;
   accent-color: var(--accent);
+  flex-shrink: 0;
+  cursor: pointer;
 }
 
 .config-checkbox span {
-  font-size: 0.875rem;
+  font-size: 0.82rem;
+  font-weight: 500;
   color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
 }
 
 .config-section--flip .config-subtitle {
