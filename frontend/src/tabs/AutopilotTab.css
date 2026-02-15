@@ -336,20 +336,10 @@
     padding: 0.35rem 0.5rem;
   }
 
-  /* Tooltip: show below on mobile to avoid viewport overflow */
-  .config-tip::after {
-    bottom: auto;
-    top: calc(100% + 8px);
-    max-width: 220px;
-    min-width: 140px;
-    font-size: 0.7rem;
-  }
-
-  .config-tip::before {
-    bottom: auto;
-    top: calc(100% + 2px);
-    border-top-color: transparent;
-    border-bottom-color: rgba(255, 255, 255, 0.12);
+  /* Tooltip popup: constrain width on mobile */
+  .config-tip-popup {
+    max-width: 240px;
+    font-size: 0.72rem;
   }
 }
 
@@ -584,14 +574,14 @@
   border-bottom: none;
 }
 
-/* ── Config Tooltip ────────────────────────────────────────────── */
+/* ── Config Tooltip (Portal-based) ─────────────────────────────── */
 
-.config-tip {
+.config-tip-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   margin-left: 5px;
   font-size: 0.6rem;
   font-weight: 700;
@@ -601,73 +591,39 @@
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 50%;
   cursor: help;
-  position: relative;
   vertical-align: middle;
   flex-shrink: 0;
   transition: color 0.2s, border-color 0.2s, background 0.2s;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
 }
 
-.config-tip:hover {
+.config-tip-icon:hover {
   color: var(--accent);
   border-color: rgba(212, 168, 83, 0.5);
   background: rgba(212, 168, 83, 0.1);
 }
 
-.config-tip::after {
-  content: attr(data-tip);
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 50%;
-  transform: translateX(-50%);
+/* The popup is rendered via React Portal at document.body level.
+   position: fixed + top/left are set inline by JS.               */
+.config-tip-popup {
+  position: fixed;
+  z-index: 10000;
   background: #151524;
   color: #d0d2d6;
-  padding: 8px 12px;
+  padding: 10px 14px;
   border-radius: 8px;
-  font-size: 0.73rem;
+  font-size: 0.76rem;
   font-weight: 400;
-  line-height: 1.5;
+  line-height: 1.55;
   white-space: pre-wrap;
-  max-width: 280px;
-  min-width: 160px;
+  max-width: 300px;
+  min-width: 140px;
   width: max-content;
   border: 1px solid rgba(255, 255, 255, 0.12);
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transition: opacity 0.18s, visibility 0.18s;
-  z-index: 200;
-}
-
-.config-tip::before {
-  content: '';
-  position: absolute;
-  bottom: calc(100% + 2px);
-  left: 50%;
-  transform: translateX(-50%);
-  border: 5px solid transparent;
-  border-top-color: rgba(255, 255, 255, 0.12);
-  opacity: 0;
-  visibility: hidden;
-  transition: opacity 0.18s, visibility 0.18s;
-  z-index: 201;
-}
-
-.config-tip:hover::after,
-.config-tip:hover::before {
-  opacity: 1;
-  visibility: visible;
-}
-
-/* When tooltip would overflow left edge, align left */
-.config-tip--left::after {
-  left: 0;
-  transform: translateX(0);
-}
-
-.config-tip--left::before {
-  left: 7px;
-  transform: translateX(0);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.55);
+  pointer-events: auto;
+  transition: opacity 0.15s ease;
 }
 
 /* ── Engine stats (new) ────────────────────────────────────────── */
@@ -764,10 +720,10 @@
     padding: 0.75rem;
   }
 
-  .config-tip::after {
-    max-width: 180px;
+  .config-tip-popup {
+    max-width: 200px;
     font-size: 0.65rem;
-    padding: 6px 8px;
+    padding: 8px 10px;
   }
 
   .portfolio-table {

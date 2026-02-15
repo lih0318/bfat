@@ -1,11 +1,79 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { api, type MarketRegimeResponse, type RegimeTf, type PortfolioItem, type SignalItem } from '../api/client'
 import './AutopilotTab.css'
 
-/* ── Tooltip helper ────────────────────────────────────────────── */
+/* ── Tooltip helper (Portal-based, never clipped) ──────────────── */
 
 function Tip({ text }: { text: string }) {
-  return <span className="config-tip" data-tip={text}>?</span>
+  const [open, setOpen] = useState(false)
+  const iconRef = useRef<HTMLSpanElement>(null)
+  const popRef = useRef<HTMLDivElement>(null)
+  const [style, setStyle] = useState<React.CSSProperties>({ opacity: 0 })
+
+  const reposition = useCallback(() => {
+    const icon = iconRef.current
+    const pop = popRef.current
+    if (!icon || !pop) return
+    const ir = icon.getBoundingClientRect()
+    const pr = pop.getBoundingClientRect()
+    const GAP = 8
+    const PAD = 8
+    // vertical: prefer above, fall back below
+    let top: number
+    if (ir.top - pr.height - GAP >= PAD) {
+      top = ir.top - pr.height - GAP
+    } else {
+      top = ir.bottom + GAP
+    }
+    // horizontal: center on icon, clamp to viewport edges
+    let left = ir.left + ir.width / 2 - pr.width / 2
+    left = Math.max(PAD, Math.min(window.innerWidth - pr.width - PAD, left))
+    setStyle({ opacity: 1, top, left })
+  }, [])
+
+  useEffect(() => {
+    if (open) {
+      // double rAF ensures the popup is in the DOM and measured
+      requestAnimationFrame(() => requestAnimationFrame(reposition))
+    } else {
+      setStyle({ opacity: 0 })
+    }
+  }, [open, reposition])
+
+  // close on any scroll so stale position doesn't linger
+  useEffect(() => {
+    if (!open) return
+    const hide = () => setOpen(false)
+    window.addEventListener('scroll', hide, { capture: true, passive: true })
+    window.addEventListener('resize', hide)
+    return () => {
+      window.removeEventListener('scroll', hide, { capture: true } as EventListenerOptions)
+      window.removeEventListener('resize', hide)
+    }
+  }, [open])
+
+  return (
+    <>
+      <span
+        ref={iconRef}
+        className="config-tip-icon"
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => setOpen(false)}
+        onTouchStart={(e) => { e.preventDefault(); setOpen((v) => !v) }}
+      >?</span>
+      {open && createPortal(
+        <div
+          ref={popRef}
+          className="config-tip-popup"
+          style={style}
+          onMouseEnter={() => setOpen(true)}
+          onMouseLeave={() => setOpen(false)}
+        >{text}</div>,
+        document.body,
+      )}
+    </>
+  )
 }
 
 /* ── Regime Block (backward compat) ────────────────────────────── */
