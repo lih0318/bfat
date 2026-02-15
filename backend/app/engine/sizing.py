@@ -8,7 +8,7 @@ Pipeline:
   4. Normalise ??gross_notional ??target_qty
   5. exchangeInfo stepSize / minNotional validation
   6. Tradability-aware redistribution loop
-  7. Strongest-signal fallback if all targets dropped
+  7. Multi-candidate tradable fallback (score-ranked search)
   8. Final leverage constraint validation
 """
 from __future__ import annotations
@@ -69,6 +69,65 @@ def _get_price(symbol: str) -> float:
         return 0.0
 
 
+def _check_tradability(
+    symbol: str,
+    equity: float,
+    leverage_target: float,
+) -> tuple:
+    """Check if *symbol* can receive a minimum viable order.
+
+    Uses per-symbol min_notional and step_size. If initial floor-rounded
+    qty falls below min_notional, bumps qty up by one step_size and
+    retries (step-size-aware budget retry) while respecting leverage cap.
+
+    Returns (is_ok, reason, qty, actual_notional, price, min_notional).
+    """
+    price = _get_price(symbol)
+    if price <= 0:
+        return (False, "no_price", 0.0, 0.0, 0.0, 0.0)
+
+    filters = ExchangeInfoCache.get_symbol_filters(symbol)
+    min_notional = filters.get("min_notional", 5.0)
+    step_size = filters.get("step_size", 0.001)
+
+    # Budget: larger of min_notional*1.1 or 5% equity, capped by leverage
+    budget = max(min_notional * 1.1, equity * 0.05)
+    max_budget = equity * leverage_target
+    budget = min(budget, max_budget)
+
+    qty = budget / price
+    qty = ExchangeInfoCache.round_quantity(symbol, qty)
+
+    if qty <= 0:
+        return (False, "qty_zero", 0.0, 0.0, price, min_notional)
+
+    actual_notional = qty * price
+
+    # Step-size-aware retry: if floor rounding pushed us below min_notional,
+    # bump qty by one step_size and check again within leverage cap.
+    if actual_notional < min_notional and step_size > 0:
+        import math as _m
+        ceil_qty = qty + step_size
+        # Round to correct precision to avoid float drift
+        precision = max(0, -int(round(_m.log10(step_size))))
+        ceil_qty = round(ceil_qty, precision)
+        ceil_notional = ceil_qty * price
+        if ceil_notional >= min_notional and ceil_notional <= max_budget:
+            qty = ceil_qty
+            actual_notional = ceil_notional
+            logger.debug(
+                "tradability: %s step-size bump %.6f -> %.6f (notional %.2f)",
+                symbol, qty - step_size, qty, actual_notional,
+            )
+
+    if actual_notional < min_notional:
+        return (False, "below_min_notional", qty, actual_notional, price, min_notional)
+
+    if actual_notional > max_budget:
+        return (False, "exceeds_leverage_cap", qty, actual_notional, price, min_notional)
+
+    return (True, "", qty, actual_notional, price, min_notional)
+
 
 @dataclass
 class TargetPosition:
@@ -86,6 +145,7 @@ class SizingResult:
     equity: float = 0.0
     gross_notional: float = 0.0
     drop_reason: str = ""  # reason if targets is empty
+    drop_meta: dict[str, Any] = field(default_factory=dict)  # detailed failure info
 
 
 def compute_target_positions(
@@ -297,52 +357,69 @@ def compute_target_positions(
         logger.debug("redist iter %d: redistributed %.2f USDT to %d survivors",
                    iteration, dropped_notional, len(surviving_targets))
 
-    # Step 7: Strongest-signal fallback if no targets
+    # Step 7: Multi-candidate tradable fallback (score-ranked search)
     if not result.targets:
-        logger.warning("sizing: attempting strongest-signal fallback")
-        
-        strongest_sym = None
-        strongest_score = 0.0
-        for sym, snap in snapshots.items():
-            if abs(snap.final_score) > abs(strongest_score):
-                strongest_sym = sym
-                strongest_score = snap.final_score
-        
-        if strongest_sym:
-            filters = ExchangeInfoCache.get_symbol_filters(strongest_sym)
-            min_notional = filters.get("min_notional", 5.0)
-            
-            fallback_notional = max(min_notional * 1.1, equity * 0.05)
-            max_notional_cap = equity * leverage_target
-            fallback_notional = min(fallback_notional, max_notional_cap)
-            
-            price = _get_price(strongest_sym)
-            if price > 0:
-                qty = fallback_notional / price
-                qty = ExchangeInfoCache.round_quantity(strongest_sym, qty)
-                
-                if qty * price >= min_notional:
-                    side = "LONG" if strongest_score > 0 else "SHORT"
-                    snap = snapshots.get(strongest_sym)
-                    tp = TargetPosition(
-                        symbol=strongest_sym,
-                        side=side,
-                        weight=math.copysign(1.0, strongest_score),
-                        target_qty=qty,
-                        target_notional=qty * price,
-                        trend_score=strongest_score,
-                    )
-                    result.targets[strongest_sym] = tp
-                    result.gross_notional = qty * price
-                    logger.info("sizing: fallback to %s with notional %.2f", strongest_sym, qty * price)
-                else:
-                    result.drop_reason = "fallback_below_min_notional"
-                    logger.warning("sizing: fallback failed - qty*price %.2f < min %.2f", 
-                                 qty * price, min_notional)
+        logger.warning("sizing: attempting multi-candidate tradable fallback")
+
+        # Sort all candidates by |final_score| descending
+        candidates = sorted(
+            snapshots.items(),
+            key=lambda x: abs(x[1].final_score),
+            reverse=True,
+        )
+
+        fail_reasons: list[str] = []
+        fallback_found = False
+
+        for sym, snap in candidates:
+            if snap.final_score == 0:
+                continue
+
+            ok, reason, qty, actual_notional, price, mn = _check_tradability(
+                sym, equity, leverage_target,
+            )
+
+            if ok:
+                side = "LONG" if snap.final_score > 0 else "SHORT"
+                tp = TargetPosition(
+                    symbol=sym,
+                    side=side,
+                    weight=math.copysign(1.0, snap.final_score),
+                    target_qty=qty,
+                    target_notional=actual_notional,
+                    trend_score=snap.final_score,
+                )
+                result.targets[sym] = tp
+                result.gross_notional = actual_notional
+                fallback_found = True
+                logger.info(
+                    "sizing: fallback OK -> %s (score=%.4f, notional=%.2f, rank=%d/%d)",
+                    sym, snap.final_score, actual_notional,
+                    len(fail_reasons) + 1, len(candidates),
+                )
+                break
             else:
-                result.drop_reason = "fallback_no_price"
-        else:
-            result.drop_reason = "no_signals_for_fallback"
+                fail_reasons.append(reason)
+                logger.debug(
+                    "sizing: fallback skip %s reason=%s (score=%.4f, price=%.4f)",
+                    sym, reason, snap.final_score, price,
+                )
+
+        if not fallback_found:
+            from collections import Counter
+            reason_counts = Counter(fail_reasons)
+            summary_parts = [f"{cnt}x {r}" for r, cnt in reason_counts.most_common()]
+            summary = ", ".join(summary_parts) if summary_parts else "no candidates"
+            result.drop_reason = "fallback_all_untradable"
+            result.drop_meta = {
+                "tried": len(fail_reasons),
+                "reason_counts": dict(reason_counts),
+                "summary": summary,
+            }
+            logger.warning(
+                "sizing: all %d fallback candidates untradable (%s)",
+                len(fail_reasons), summary,
+            )
 
     # Step 8: Final leverage constraint validation
     if result.targets:

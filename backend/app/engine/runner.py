@@ -461,19 +461,30 @@ class EngineRunner:
                 'fallback_below_min_notional': 'Even fallback position below minimum order size',
                 'fallback_no_price': 'Fallback failed: price unavailable',
                 'no_signals_for_fallback': 'No viable signals for fallback',
+                'fallback_all_untradable': 'All fallback candidates untradable',
+                'exceeds_leverage_cap': 'Minimum order exceeds leverage budget',
                 'all_filtered_unknown': 'All targets filtered for unknown reason',
             }
             
             detailed_message = reason_messages.get(drop_reason, f'Sizing produced no targets ({drop_reason or "deadzone/top-k/min_weight"})')
+
+            # Append drop_meta summary when available (multi-candidate fallback)
+            drop_meta = getattr(self._sizing_result, 'drop_meta', {}) if self._sizing_result else {}
+            if drop_meta:
+                tried = drop_meta.get('tried', 0)
+                summary = drop_meta.get('summary', '')
+                if tried and summary:
+                    detailed_message += f' (tried {tried} symbols: {summary})'
             
             ledger.record(
                 "exec_tick_skip",
                 {
                     "reason": drop_reason or "no_targets",
                     "message": detailed_message,
+                    "meta": drop_meta,
                 },
             )
-            logger.info("exec_tick: no targets, reason=%s", drop_reason or "unknown")
+            logger.info("exec_tick: no targets, reason=%s, meta=%s", drop_reason or "unknown", drop_meta or "")
             return
 
         try:
