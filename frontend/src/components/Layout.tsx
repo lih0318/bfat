@@ -1,7 +1,7 @@
 import { type ReactNode } from 'react'
 import './Layout.css'
 
-type TabId = 'wallet' | 'charts' | 'positions' | 'autopilot' | 'journal'
+type TabId = 'wallet' | 'charts' | 'positions' | 'autopilot' | 'insight' | 'journal'
 
 interface LayoutProps {
   activeTab: TabId
@@ -15,6 +15,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'charts', label: 'Charts' },
   { id: 'positions', label: 'Positions' },
   { id: 'autopilot', label: 'Rich Man' },
+  { id: 'insight', label: 'Insight' },
   { id: 'journal', label: 'Journal' },
 ]
 
@@ -25,7 +26,7 @@ export function Layout({ activeTab, onTab, onLogout, children }: LayoutProps) {
         <div className="layout-header-top">
           <h1 className="layout-title">Binance Futures Auto Trader</h1>
           {onLogout && (
-            <button type="button" className="layout-logout-btn" onClick={onLogout} title="Log out">
+            <button type="button" className="layout-logout-btn" onClick={onLogout}>
               Logout
             </button>
           )}

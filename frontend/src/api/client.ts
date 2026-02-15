@@ -80,6 +80,57 @@ export interface SignalItem {
   funding_rate: number
   funding_scale: number
   horizons: Record<number, number>
+  realized_vol: number
+  atr: number
+  reasoning: string
+}
+
+export interface EnginePulse {
+  last_signal_tick: number
+  last_exec_tick: number
+  signal_count: number
+  exec_count: number
+  signal_interval_sec: number
+  exec_interval_sec: number
+  time_since_signal_sec: number
+  time_since_exec_sec: number
+  next_signal_sec: number
+  next_exec_sec: number
+  signal_tf: string
+}
+
+export interface MarketSummary {
+  bullish_count: number
+  bearish_count: number
+  neutral_count: number
+  avg_trend_score: number
+  temperature: string
+}
+
+export interface RiskStatus {
+  equity: number
+  peak_equity: number
+  drawdown_pct: number
+  drawdown_threshold: number
+  gross_leverage: number
+  max_leverage: number
+  warnings: string[]
+  kill_active: boolean
+}
+
+export interface UniverseScan {
+  selected_count: number
+  excluded: Array<{ symbol: string; reason: string }>
+  total_scanned: number
+}
+
+export interface InsightData {
+  engine_pulse: EnginePulse
+  market_summary: MarketSummary
+  risk_status: RiskStatus
+  universe_scan: UniverseScan
+  signals: SignalItem[]
+  portfolio: PortfolioItem[]
 }
 
 export const api = {
@@ -159,6 +210,7 @@ export const api = {
     },
     portfolio: () => fetchApi<PortfolioItem[]>('/api/autopilot/portfolio'),
     signals: () => fetchApi<SignalItem[]>('/api/autopilot/signals'),
+    insight: () => fetchApi<InsightData>('/api/autopilot/insight'),
   },
   journal: {
     list: (limit?: number, mode?: 'all' | 'live', type?: string) => {

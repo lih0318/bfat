@@ -5,6 +5,7 @@ import { WalletTab } from './tabs/WalletTab'
 import { ChartsTab } from './tabs/ChartsTab'
 import { PositionsTab } from './tabs/PositionsTab'
 import { AutopilotTab } from './tabs/AutopilotTab'
+import { InsightTab } from './tabs/InsightTab'
 import { JournalTab } from './tabs/JournalTab'
 import { getAuthToken, clearAuthToken, api } from './api/client'
 import './App.css'
@@ -75,6 +76,8 @@ function App() {
         return <PositionsTab />
       case 'autopilot':
         return <AutopilotTab />
+      case 'insight':
+        return <InsightTab />
       case 'journal':
         return <JournalTab />
       default:

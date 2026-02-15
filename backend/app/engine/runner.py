@@ -59,12 +59,15 @@ class EngineRunner:
         self._universe: Optional[UniverseResult] = None
         self._last_signal_tick: float = 0.0
         self._last_exec_tick: float = 0.0
+        self._signal_count: int = 0
+        self._exec_count: int = 0
         self._snapshots: dict[str, SignalSnapshot] = {}
         self._sizing_result: Optional[SizingResult] = None
         self._equity: float = 0.0
         self._peak_equity: float = 0.0
         self._current_symbols: set[str] = set()
         self._status_reason: str = ""
+        self._risk_warnings: list[str] = []
 
     # ── Public API ───────────────────────────────────────────────
 
@@ -131,6 +134,107 @@ class EngineRunner:
                 "horizons": snap.horizon_signals,
             })
         return result
+
+    def get_insight(self) -> dict[str, Any]:
+        """Return comprehensive engine insight data for Insight tab."""
+        # Engine pulse
+        now = time.time()
+        signal_interval = self._signal_interval_sec()
+        exec_interval = self._config.execution_tick_sec
+        
+        time_since_signal = now - self._last_signal_tick if self._last_signal_tick > 0 else 0
+        time_since_exec = now - self._last_exec_tick if self._last_exec_tick > 0 else 0
+        next_signal = max(0, signal_interval - time_since_signal)
+        next_exec = max(0, exec_interval - time_since_exec)
+        
+        engine_pulse = {
+            "last_signal_tick": self._last_signal_tick,
+            "last_exec_tick": self._last_exec_tick,
+            "signal_count": self._signal_count,
+            "exec_count": self._exec_count,
+            "signal_interval_sec": signal_interval,
+            "exec_interval_sec": exec_interval,
+            "time_since_signal_sec": round(time_since_signal, 1),
+            "time_since_exec_sec": round(time_since_exec, 1),
+            "next_signal_sec": round(next_signal, 1),
+            "next_exec_sec": round(next_exec, 1),
+            "signal_tf": self._config.signal_tf,
+        }
+        
+        # Market summary
+        bullish_count = 0
+        bearish_count = 0
+        neutral_count = 0
+        total_score = 0.0
+        
+        for snap in self._snapshots.values():
+            total_score += snap.final_score
+            if snap.final_score > 0.1:
+                bullish_count += 1
+            elif snap.final_score < -0.1:
+                bearish_count += 1
+            else:
+                neutral_count += 1
+        
+        avg_score = total_score / len(self._snapshots) if self._snapshots else 0.0
+        
+        # Market temperature label
+        if avg_score >= 0.3:
+            temperature = "강한 상승"
+        elif avg_score >= 0.1:
+            temperature = "약한 상승"
+        elif avg_score <= -0.3:
+            temperature = "강한 하락"
+        elif avg_score <= -0.1:
+            temperature = "약한 하락"
+        else:
+            temperature = "중립"
+        
+        market_summary = {
+            "bullish_count": bullish_count,
+            "bearish_count": bearish_count,
+            "neutral_count": neutral_count,
+            "avg_trend_score": round(avg_score, 4),
+            "temperature": temperature,
+        }
+        
+        # Risk status
+        drawdown_pct = 0.0
+        if self._peak_equity > 0:
+            drawdown_pct = (self._peak_equity - self._equity) / self._peak_equity
+        
+        gross_leverage = 0.0
+        if self._equity > 0 and self._sizing_result:
+            gross_leverage = self._sizing_result.gross_notional / self._equity
+        
+        risk_status = {
+            "equity": round(self._equity, 2),
+            "peak_equity": round(self._peak_equity, 2),
+            "drawdown_pct": round(drawdown_pct, 4),
+            "drawdown_threshold": self._config.drawdown_kill_pct,
+            "gross_leverage": round(gross_leverage, 2),
+            "max_leverage": self._config.effective_leverage_target,
+            "warnings": self._risk_warnings.copy(),
+            "kill_active": not self._running and "kill" in self._status_reason.lower(),
+        }
+        
+        # Universe scan
+        universe_scan = {
+            "selected_count": len(self._universe.symbols) if self._universe else 0,
+            "excluded": self._universe.excluded if self._universe else [],
+            "total_scanned": (
+                len(self._universe.symbols) + len(self._universe.excluded)
+                if self._universe
+                else 0
+            ),
+        }
+        
+        return {
+            "engine_pulse": engine_pulse,
+            "market_summary": market_summary,
+            "risk_status": risk_status,
+            "universe_scan": universe_scan,
+        }
 
     def start(self) -> dict[str, Any]:
         if self._running:
@@ -218,6 +322,7 @@ class EngineRunner:
 
     def _signal_tick(self) -> None:
         self._last_signal_tick = time.time()
+        self._signal_count += 1
         cfg = self._config
 
         try:
@@ -308,8 +413,11 @@ class EngineRunner:
                 logger.error("RISK KILL: %s", risk.reason)
                 return
             if risk.warnings:
+                self._risk_warnings = risk.warnings.copy()
                 for w in risk.warnings:
                     logger.warning("Risk warning: %s", w)
+            else:
+                self._risk_warnings = []
 
             # Record signal snapshot
             signal_data = {
@@ -339,6 +447,7 @@ class EngineRunner:
 
     def _exec_tick(self) -> None:
         self._last_exec_tick = time.time()
+        self._exec_count += 1
 
         if not self._sizing_result or not self._sizing_result.targets:
             return

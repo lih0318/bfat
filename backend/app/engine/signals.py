@@ -154,3 +154,60 @@ def apply_funding_overlay(
             snap.funding_scale = 1.0
 
         snap.final_score = snap.trend_score * snap.rsi_scale * snap.funding_scale
+
+
+def generate_reasoning(snapshot: SignalSnapshot) -> str:
+    """Generate Korean one-line reasoning statement for a signal snapshot."""
+    parts = []
+    
+    # Horizon analysis
+    horizons = snapshot.horizon_signals
+    if horizons:
+        up = sum(1 for v in horizons.values() if v > 0)
+        down = sum(1 for v in horizons.values() if v < 0)
+        total = len(horizons)
+        
+        if up > down:
+            parts.append(f"{total}개 horizon 중 {up}개 상승 ↑")
+        elif down > up:
+            parts.append(f"{total}개 horizon 중 {down}개 하락 ↓")
+        else:
+            parts.append(f"{total}개 horizon 혼조")
+    
+    # RSI analysis
+    rsi = snapshot.rsi
+    if rsi >= 70:
+        parts.append(f"RSI {rsi:.0f}(과매수)")
+    elif rsi <= 30:
+        parts.append(f"RSI {rsi:.0f}(과매도)")
+    elif rsi >= 55:
+        parts.append(f"RSI {rsi:.0f}(상승 편향)")
+    elif rsi <= 45:
+        parts.append(f"RSI {rsi:.0f}(하락 편향)")
+    else:
+        parts.append(f"RSI {rsi:.0f}(중립)")
+    
+    # Funding rate analysis
+    fr = snapshot.funding_rate
+    if abs(fr) < 0.0001:
+        parts.append("펀딩비 안정")
+    elif fr > 0.001:
+        parts.append(f"펀딩비 높음({fr*100:.3f}%)")
+    elif fr < -0.001:
+        parts.append(f"펀딩비 낮음({fr*100:.3f}%)")
+    else:
+        parts.append("펀딩비 보통")
+    
+    # Overall direction
+    if snapshot.final_score > 0.3:
+        direction = "→ 강한 롱"
+    elif snapshot.final_score > 0:
+        direction = "→ 약한 롱"
+    elif snapshot.final_score < -0.3:
+        direction = "→ 강한 숏"
+    elif snapshot.final_score < 0:
+        direction = "→ 약한 숏"
+    else:
+        direction = "→ 시그널 없음"
+    
+    return ". ".join(parts) + ". " + direction

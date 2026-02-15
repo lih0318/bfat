@@ -22,8 +22,10 @@ from pydantic import BaseModel
 
 from app.engine.accounting import ledger
 from app.engine.config_model import EngineConfig, load_engine_config, save_engine_config
+from app.engine.datafeed import fetch_atr_map, fetch_vol_map
 from app.engine.profiles import PROFILES, apply_profile
 from app.engine.runner import engine
+from app.engine.signals import generate_reasoning
 
 router = APIRouter()
 
@@ -204,5 +206,59 @@ def portfolio() -> list[dict[str, Any]]:
 
 @router.get("/signals")
 def signals() -> list[dict[str, Any]]:
-    """Full universe TrendScore snapshot."""
-    return engine.get_signals()
+    """Full universe TrendScore snapshot with vol/atr/reasoning."""
+    signals_data = engine.get_signals()
+    
+    # Fetch vol/atr for all symbols
+    if signals_data:
+        cfg = load_engine_config()
+        symbols = [s["symbol"] for s in signals_data]
+        
+        try:
+            vol_map = fetch_vol_map(symbols, cfg.signal_tf, cfg.vol_window)
+            atr_map = fetch_atr_map(symbols, cfg.signal_tf, cfg.stop_atr_window)
+        except Exception:
+            vol_map = {}
+            atr_map = {}
+        
+        # Add vol/atr/reasoning to each signal
+        for sig in signals_data:
+            sym = sig["symbol"]
+            sig["realized_vol"] = round(vol_map.get(sym, 0.0), 4)
+            sig["atr"] = round(atr_map.get(sym, 0.0), 2)
+            
+            # Generate reasoning (reconstruct SignalSnapshot for this)
+            from app.engine.signals import SignalSnapshot
+            snap = SignalSnapshot(
+                symbol=sym,
+                trend_score_raw=sig["trend_score_raw"],
+                trend_score=sig["trend_score"],
+                final_score=sig["final_score"],
+                rsi=sig["rsi"],
+                rsi_scale=sig["rsi_scale"],
+                funding_rate=sig["funding_rate"],
+                funding_scale=sig["funding_scale"],
+                horizon_signals=sig["horizons"],
+            )
+            sig["reasoning"] = generate_reasoning(snap)
+    
+    return signals_data
+
+
+# ── NEW: Insight ─────────────────────────────────────────────────
+
+
+@router.get("/insight")
+def insight() -> dict[str, Any]:
+    """Comprehensive engine insight data for Insight tab."""
+    insight_data = engine.get_insight()
+    
+    # Add signals with reasoning for decision log
+    signals_data = signals()  # reuse the signals endpoint
+    insight_data["signals"] = signals_data
+    
+    # Add portfolio for decision context
+    portfolio_data = engine.get_portfolio()
+    insight_data["portfolio"] = portfolio_data
+    
+    return insight_data
