@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -186,11 +187,12 @@ class AccountingLedger:
         """Get recent events as activity log entries (for UI)."""
         self._load()
         result: list[dict[str, Any]] = []
+        live_types = ("fill", "exit", "order", "exec_tick_skip", "exec_tick_summary")
         for ev in reversed(self._events):
             if len(result) >= limit:
                 break
             et = ev.get("event", "")
-            if mode == "live" and et not in ("fill", "exit", "order"):
+            if mode == "live" and et not in live_types:
                 continue
             result.append({
                 "ts": ev.get("ts", ""),
@@ -212,6 +214,19 @@ class AccountingLedger:
         if et == "order":
             return (f"Order {ev.get('order_type', '')} {ev.get('side', '')} {sym} "
                     f"qty={ev.get('qty', 0):.6f}")
+        if et == "exec_tick_skip":
+            return ev.get("message", "Exec tick skipped (no targets).")
+        if et == "exec_tick_summary":
+            orders = ev.get("orders_placed", 0)
+            reasons = ev.get("skip_reasons", [])
+            targets = ev.get("targets_count", 0)
+            if orders > 0:
+                return f"Exec tick: {orders} order(s) placed (targets={targets})."
+            # No orders: explain why
+            reason_counts = Counter(r.get("reason", "") for r in reasons)
+            parts = [f"{cnt}× {reason}" for reason, cnt in sorted(reason_counts.items())]
+            reason_str = ", ".join(parts) if parts else "no deltas"
+            return f"Exec tick: no orders (targets={targets}). Reasons: {reason_str}."
         if et == "signal_snapshot":
             n = len(ev.get("signals", {}))
             return f"Signal snapshot: {n} symbols"

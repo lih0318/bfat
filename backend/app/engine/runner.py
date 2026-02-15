@@ -450,6 +450,14 @@ class EngineRunner:
         self._exec_count += 1
 
         if not self._sizing_result or not self._sizing_result.targets:
+            ledger.record(
+                "exec_tick_skip",
+                {
+                    "reason": "no_targets",
+                    "message": "Sizing produced no target positions (deadzone/top-k/min_weight).",
+                },
+            )
+            logger.info("exec_tick: no targets, skip")
             return
 
         try:
@@ -465,12 +473,14 @@ class EngineRunner:
                 except Exception:
                     pass
 
-            # Execute
-            self._execution.tick(
+            # Execute and get summary for activity log
+            summary = self._execution.tick(
                 targets=self._sizing_result.targets,
                 config=cfg,
                 equity=self._equity,
             )
+            if summary is not None:
+                ledger.record("exec_tick_summary", summary)
 
         except Exception as exc:
             logger.exception("exec_tick error: %s", exc)

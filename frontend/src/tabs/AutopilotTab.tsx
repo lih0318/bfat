@@ -564,14 +564,17 @@ export function AutopilotTab() {
         </div>
         <div className="activity-list">
           {activity.length === 0 && <p className="activity-empty">No activity yet.</p>}
-          {activity.map((item, i) => (
-            <div key={`${item.ts}-${i}`} className={`activity-item activity-${item.type}`}>
-              <span className="activity-ts">{new Date(item.ts).toLocaleTimeString()}</span>
-              <span className="activity-type">{item.type}</span>
-              <span className="activity-symbol">{item.symbol}</span>
-              <span className="activity-msg">{item.message}</span>
-            </div>
-          ))}
+          {activity.map((item, i) => {
+            const typeLabel = (item.type === 'exec_tick_skip' || item.type === 'exec_tick_summary') ? 'Exec' : item.type
+            return (
+              <div key={`${item.ts}-${i}`} className={`activity-item activity-${item.type}`}>
+                <span className="activity-ts">{new Date(item.ts).toLocaleTimeString()}</span>
+                <span className="activity-type">{typeLabel}</span>
+                <span className="activity-symbol">{item.symbol || '—'}</span>
+                <span className="activity-msg">{item.message}</span>
+              </div>
+            )
+          })}
         </div>
       </div>
     </div>

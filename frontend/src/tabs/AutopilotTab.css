@@ -523,6 +523,8 @@
 .activity-skip { color: var(--text-muted); }
 .activity-error { color: var(--negative); }
 .activity-system { color: var(--text-muted); }
+.activity-exec_tick_skip { color: var(--text-muted); }
+.activity-exec_tick_summary { color: var(--text-muted); }
 
 .activity-symbol {
   color: var(--text-muted);

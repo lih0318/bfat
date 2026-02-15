@@ -83,7 +83,7 @@ class ExecutionEngine:
         targets: dict[str, TargetPosition],
         config: EngineConfig,
         equity: float,
-    ) -> None:
+    ) -> Optional[dict[str, Any]]:
         """
         Single execution tick:
         1. Fetch current positions
@@ -91,13 +91,15 @@ class ExecutionEngine:
         3. Cancel stale orders
         4. Place new orders for significant deltas
         5. Manage brackets
+
+        Returns summary dict: { orders_placed, skip_reasons, targets_count } for logging.
         """
         # Fetch all positions
         try:
             all_positions = binance_client.position_information()
         except Exception as exc:
             logger.error("execution tick: position fetch failed: %s", exc)
-            return
+            return None
 
         current_map: dict[str, dict[str, Any]] = {}
         for p in all_positions:
@@ -114,6 +116,8 @@ class ExecutionEngine:
 
         # Process targets: open/adjust positions
         threshold_notional = equity * config.execution_threshold_pct
+        orders_placed = 0
+        skip_reasons: list[dict[str, str]] = []
 
         for sym, target in targets.items():
             state = self._get_state(sym)
@@ -123,7 +127,7 @@ class ExecutionEngine:
             self._cancel_stale_orders(state, config)
 
             if state.pending_order_id:
-                # Already have a pending order — skip
+                skip_reasons.append({"symbol": sym, "reason": "pending_order"})
                 continue
 
             current_qty = 0.0
@@ -138,7 +142,8 @@ class ExecutionEngine:
             delta = target_signed - current_signed
 
             if abs(delta) * self._get_price(sym) < threshold_notional:
-                continue  # delta too small
+                skip_reasons.append({"symbol": sym, "reason": "delta_below_threshold"})
+                continue
 
             # Determine order side and qty
             if delta > 0:
@@ -155,11 +160,13 @@ class ExecutionEngine:
                 # Recalculate remaining delta
                 order_qty = abs(abs(delta) - current_qty)
                 if order_qty * self._get_price(sym) < threshold_notional:
+                    skip_reasons.append({"symbol": sym, "reason": "remaining_below_threshold"})
                     continue
 
             # Round qty
             order_qty = ExchangeInfoCache.round_quantity(sym, order_qty)
             if order_qty <= 0:
+                skip_reasons.append({"symbol": sym, "reason": "rounded_qty_zero"})
                 continue
 
             # Check reduce_only
@@ -172,6 +179,7 @@ class ExecutionEngine:
 
             # Slice large orders
             slices = self._compute_slices(order_qty, sym)
+            orders_placed += len(slices)
 
             for slice_qty in slices:
                 self._place_order(sym, order_side, slice_qty, config, state, reduce_only)
@@ -183,6 +191,13 @@ class ExecutionEngine:
             if sym not in targets:
                 state = self._get_state(sym)
                 self._close_position(sym, current, state)
+                orders_placed += 1  # close counts as an order
+
+        return {
+            "orders_placed": orders_placed,
+            "skip_reasons": skip_reasons,
+            "targets_count": len(targets),
+        }
 
     # ── Order placement ──────────────────────────────────────────
 
