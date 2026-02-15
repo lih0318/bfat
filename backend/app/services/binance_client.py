@@ -347,6 +347,49 @@ class BinanceFuturesClient:
     def set_leverage(self, symbol: str, leverage: int, recv_window: int = DEFAULT_RECV_WINDOW) -> dict[str, Any]:
         return self.client.change_leverage(symbol=symbol, leverage=leverage, recvWindow=recv_window)
 
+    def set_margin_type(self, symbol: str, margin_type: str = "ISOLATED", recv_window: int = DEFAULT_RECV_WINDOW) -> dict[str, Any]:
+        """
+        Set margin type for a symbol: 'ISOLATED' or 'CROSSED'.
+        Handles Binance error -4046 (no need to change margin type) gracefully.
+        Returns response dict or {'code': 200, 'msg': 'already_set'} if already correct.
+        """
+        try:
+            return self._signed_request("POST", "/fapi/v1/marginType", {
+                "symbol": symbol,
+                "marginType": margin_type,
+                "recvWindow": recv_window,
+            })
+        except httpx.HTTPStatusError as exc:
+            # Binance returns 400 with code -4046 if already set to the same margin type
+            try:
+                body = exc.response.json()
+                if body.get("code") == -4046:
+                    logger.debug("set_margin_type: %s already %s", symbol, margin_type)
+                    return {"code": 200, "msg": "already_set"}
+            except Exception:
+                pass
+            raise
+        except ClientError as exc:
+            # binance-connector may raise ClientError with error_code=-4046
+            if getattr(exc, "error_code", None) == -4046:
+                logger.debug("set_margin_type: %s already %s", symbol, margin_type)
+                return {"code": 200, "msg": "already_set"}
+            raise
+
+    def get_margin_type(self, symbol: str, recv_window: int = DEFAULT_RECV_WINDOW) -> str:
+        """
+        Get current margin type for a symbol by inspecting position info.
+        Returns 'isolated' or 'cross'.
+        """
+        try:
+            positions = self.position_information(symbol=symbol, recv_window=recv_window)
+            for p in positions:
+                if p.get("symbol") == symbol:
+                    return str(p.get("marginType", "cross")).lower()
+        except Exception as exc:
+            logger.warning("get_margin_type failed for %s: %s", symbol, exc)
+        return "cross"  # default assumption
+
     # ── New methods for TSMOM engine ─────────────────────────────
 
     def book_ticker(self, symbol: str) -> dict[str, Any]:

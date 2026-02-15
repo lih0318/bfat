@@ -64,6 +64,12 @@ class EngineConfigUpdate(BaseModel):
     listing_age_days: int | None = None
     max_spread_pct: float | None = None
     drawdown_kill_pct: float | None = None
+    margin_mode: str | None = None
+    risk_per_trade_pct: float | None = None
+    max_symbol_leverage: int | None = None
+    min_symbol_leverage: int | None = None
+    max_concurrent_symbols: int | None = None
+    reserve_margin_buffer_pct: float | None = None
     symbol: str | None = None
 
 

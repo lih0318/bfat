@@ -112,12 +112,57 @@ def check_per_symbol_leverage(
     return RiskCheckResult(ok=True)
 
 
+def check_available_balance(
+    available_balance: float,
+    equity: float,
+    reserve_buffer_pct: float = 0.10,
+) -> RiskCheckResult:
+    """
+    Ensure available balance (after open positions' margin) exceeds the reserve buffer.
+    Prevents new entries when margin is depleted.
+    """
+    if equity <= 0:
+        return RiskCheckResult(ok=True)
+    reserve = equity * reserve_buffer_pct
+    if available_balance < reserve:
+        return RiskCheckResult(
+            ok=False,
+            reason=f"Available balance {available_balance:.2f} below reserve "
+                   f"{reserve:.2f} ({reserve_buffer_pct:.0%} of equity {equity:.2f})",
+        )
+    if available_balance < reserve * 1.5:
+        return RiskCheckResult(
+            ok=True,
+            warnings=[
+                f"Available balance low: {available_balance:.2f} "
+                f"(reserve={reserve:.2f})"
+            ],
+        )
+    return RiskCheckResult(ok=True)
+
+
+def check_concurrent_symbols(
+    open_symbol_count: int,
+    max_concurrent: int = 10,
+) -> RiskCheckResult:
+    """Block new entries if max concurrent symbols reached."""
+    if open_symbol_count >= max_concurrent:
+        return RiskCheckResult(
+            ok=False,
+            reason=f"Concurrent symbols {open_symbol_count} >= limit {max_concurrent}",
+        )
+    return RiskCheckResult(ok=True)
+
+
 def run_all_checks(
     current_equity: float,
     peak_equity: float,
     positions: list[dict[str, Any]],
     kill_pct: float = 0.10,
     max_gross_leverage: float = 3.0,
+    available_balance: float = 0.0,
+    reserve_buffer_pct: float = 0.10,
+    max_concurrent_symbols: int = 10,
 ) -> RiskCheckResult:
     """Run all risk checks and return the most severe result."""
     warnings: list[str] = []
@@ -136,6 +181,22 @@ def run_all_checks(
         return exp
     if exp.warnings:
         warnings.extend(exp.warnings)
+
+    # Available balance / reserve buffer
+    if available_balance > 0:
+        ab = check_available_balance(available_balance, current_equity, reserve_buffer_pct)
+        if not ab.ok:
+            ab.warnings = warnings + (ab.warnings or [])
+            return ab
+        if ab.warnings:
+            warnings.extend(ab.warnings)
+
+    # Concurrent symbols
+    open_count = len([p for p in positions if float(p.get("positionAmt", 0)) != 0])
+    cs = check_concurrent_symbols(open_count, max_concurrent_symbols)
+    if not cs.ok:
+        cs.warnings = warnings + (cs.warnings or [])
+        return cs
 
     result = RiskCheckResult(ok=True)
     if warnings:

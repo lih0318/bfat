@@ -1,18 +1,24 @@
 """
 Engine main loop: orchestrates signal_tick and exec_tick.
 
+Rollout Phases (Isolated 전환):
+  Phase A (✅ 현재): ISOLATED 강제 + risk_per_trade_pct 기반 사이징 + 심볼별 레버리지
+  Phase B: risk_per_trade_pct 동적 튜닝 + 심볼별 마진 모니터링
+  Phase C: UI/Insight 고도화 + 프로파일 마진 튜닝
+
 Signal Tick (at SIGNAL_TF boundary):
   1. Universe refresh
   2. Datafeed collection
   3. TrendScore computation
-  4. Sizing → target_qty
-  5. Risk guard check
+  4. Sizing → target_qty (risk-based + leverage computation)
+  5. Risk guard check (drawdown + available balance + concurrent symbols)
 
 Exec Tick (every execution_tick_sec):
+  0. Pre-flight: margin mode + leverage per symbol
   1. Current positions fetch
   2. Delta = target − current
   3. ExecutionEngine.tick()
-  4. Bracket management
+  4. Bracket management (actual position qty)
   5. Accounting
 """
 from __future__ import annotations
@@ -207,6 +213,14 @@ class EngineRunner:
         if self._equity > 0 and self._sizing_result:
             gross_leverage = self._sizing_result.gross_notional / self._equity
         
+        # Fetch available balance for insight
+        _available_bal = 0.0
+        try:
+            _acct = binance_client.account()
+            _available_bal = float(_acct.get("availableBalance", 0) or 0)
+        except Exception:
+            pass
+
         risk_status = {
             "equity": round(self._equity, 2),
             "peak_equity": round(self._peak_equity, 2),
@@ -216,6 +230,12 @@ class EngineRunner:
             "max_leverage": self._config.effective_leverage_target,
             "warnings": self._risk_warnings.copy(),
             "kill_active": not self._running and "kill" in self._status_reason.lower(),
+            "margin_mode": self._config.margin_mode,
+            "available_balance": round(_available_bal, 2),
+            "reserve_buffer_pct": self._config.reserve_margin_buffer_pct,
+            "max_symbol_leverage": self._config.max_symbol_leverage,
+            "risk_per_trade_pct": self._config.risk_per_trade_pct,
+            "max_concurrent_symbols": self._config.max_concurrent_symbols,
         }
         
         # Universe scan
@@ -377,6 +397,9 @@ class EngineRunner:
             except Exception:
                 pass
 
+            # ATR map for risk-based sizing
+            _atr_map = fetch_atr_map(symbols, cfg.signal_tf, cfg.stop_atr_window)
+
             self._sizing_result = compute_target_positions(
                 self._snapshots, vol_map, penalty_map,
                 equity=self._equity,
@@ -388,6 +411,11 @@ class EngineRunner:
                 min_weight_floor=cfg.min_weight_floor,
                 max_weight_cap=cfg.max_weight_cap,
                 current_symbols=self._current_symbols,
+                risk_per_trade_pct=cfg.risk_per_trade_pct,
+                max_symbol_leverage=cfg.max_symbol_leverage,
+                min_symbol_leverage=cfg.min_symbol_leverage,
+                stop_k=cfg.stop_k,
+                atr_map=_atr_map,
             )
 
             # 5. Risk guard
@@ -398,12 +426,23 @@ class EngineRunner:
             except Exception:
                 pass
 
+            # Fetch available balance for reserve-buffer check
+            _available_balance = 0.0
+            try:
+                acct_info = binance_client.account()
+                _available_balance = float(acct_info.get("availableBalance", 0) or 0)
+            except Exception:
+                pass
+
             risk = run_all_checks(
                 current_equity=self._equity,
                 peak_equity=self._peak_equity,
                 positions=positions,
                 kill_pct=cfg.drawdown_kill_pct,
                 max_gross_leverage=cfg.effective_leverage_target * 2,
+                available_balance=_available_balance,
+                reserve_buffer_pct=cfg.reserve_margin_buffer_pct,
+                max_concurrent_symbols=cfg.max_concurrent_symbols,
             )
             if risk.kill:
                 self._running = False
@@ -412,6 +451,14 @@ class EngineRunner:
                 ledger.record("risk_kill", {"reason": risk.reason})
                 logger.error("RISK KILL: %s", risk.reason)
                 return
+            if not risk.ok and not risk.kill:
+                # Risk check failed (non-fatal): block new entries
+                if self._sizing_result:
+                    self._sizing_result.targets.clear()
+                    self._sizing_result.drop_reason = "entry_skipped_risk_budget"
+                ledger.record("risk_block_entry", {"reason": risk.reason})
+                logger.warning("Risk block entry: %s", risk.reason)
+
             if risk.warnings:
                 self._risk_warnings = risk.warnings.copy()
                 for w in risk.warnings:
@@ -464,6 +511,13 @@ class EngineRunner:
                 'fallback_all_untradable': 'All fallback candidates untradable',
                 'exceeds_leverage_cap': 'Minimum order exceeds leverage budget',
                 'all_filtered_unknown': 'All targets filtered for unknown reason',
+                # Isolated margin / risk guard reasons
+                'margin_mode_switch_failed': 'Failed to switch margin mode (check Binance position)',
+                'isolated_margin_insufficient': 'Insufficient isolated margin for entry',
+                'symbol_leverage_clamped': 'Symbol leverage clamped to min/max bounds',
+                'entry_skipped_risk_budget': 'Entry skipped: risk budget exceeded',
+                'available_balance_low': 'Available balance below reserve buffer',
+                'max_concurrent_reached': 'Max concurrent symbols limit reached',
             }
             
             detailed_message = reason_messages.get(drop_reason, f'Sizing produced no targets ({drop_reason or "deadzone/top-k/min_weight"})')
@@ -488,17 +542,9 @@ class EngineRunner:
             return
 
         try:
-            # Set Binance account leverage for margin efficiency.
-            # Note: Binance leverage ≠ actual exposure. It only determines margin requirement.
-            # Actual risk is controlled by position sizing (effective_leverage_target).
-            # We set Binance leverage high enough to avoid "insufficient margin" errors.
+            # Margin mode & leverage are now handled by ExecutionEngine._preflight()
+            # per symbol before each order placement (ISOLATED mode support).
             cfg = self._config
-            max_lev = max(10, min(20, int(cfg.effective_leverage_target * 2)))
-            for sym in self._sizing_result.targets:
-                try:
-                    binance_client.set_leverage(symbol=sym, leverage=max_lev)
-                except Exception:
-                    pass
 
             # Execute and get summary for activity log
             summary = self._execution.tick(

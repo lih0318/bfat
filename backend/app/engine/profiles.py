@@ -40,6 +40,12 @@ CONSERVATIVE: dict[str, Any] = {
     "listing_age_days": 180,
     "max_spread_pct": 0.10,
     "drawdown_kill_pct": 0.10,
+    "margin_mode": "ISOLATED",
+    "risk_per_trade_pct": 0.005,
+    "max_symbol_leverage": 10,
+    "min_symbol_leverage": 1,
+    "max_concurrent_symbols": 5,
+    "reserve_margin_buffer_pct": 0.15,
 }
 
 # ── Balanced ─────────────────────────────────────────────────────
@@ -74,6 +80,12 @@ BALANCED: dict[str, Any] = {
     "listing_age_days": 90,
     "max_spread_pct": 0.15,
     "drawdown_kill_pct": 0.15,
+    "margin_mode": "ISOLATED",
+    "risk_per_trade_pct": 0.01,
+    "max_symbol_leverage": 20,
+    "min_symbol_leverage": 2,
+    "max_concurrent_symbols": 8,
+    "reserve_margin_buffer_pct": 0.10,
 }
 
 # ── Aggressive ───────────────────────────────────────────────────
@@ -108,6 +120,12 @@ AGGRESSIVE: dict[str, Any] = {
     "listing_age_days": 60,
     "max_spread_pct": 0.20,
     "drawdown_kill_pct": 0.25,
+    "margin_mode": "ISOLATED",
+    "risk_per_trade_pct": 0.02,
+    "max_symbol_leverage": 25,
+    "min_symbol_leverage": 3,
+    "max_concurrent_symbols": 12,
+    "reserve_margin_buffer_pct": 0.05,
 }
 
 PROFILES: dict[str, dict[str, Any]] = {

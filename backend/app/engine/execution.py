@@ -76,6 +76,52 @@ class ExecutionEngine:
             self._states[symbol] = OrderState(symbol=symbol)
         return self._states[symbol]
 
+    # ── Pre-flight ────────────────────────────────────────────────
+
+    def _preflight(
+        self,
+        symbol: str,
+        config: EngineConfig,
+        computed_leverage: int = 0,
+    ) -> tuple[bool, str]:
+        """
+        Pre-flight check before placing an order for a symbol:
+        1. Set margin mode (ISOLATED/CROSSED)
+        2. Set leverage (from risk-sizing computed_leverage, or config fallback)
+        Returns (ok, reason).
+        """
+        target_margin = config.margin_mode  # "ISOLATED" or "CROSSED"
+        # Use per-symbol computed leverage if provided, otherwise fallback
+        if computed_leverage > 0:
+            leverage = max(
+                config.min_symbol_leverage,
+                min(config.max_symbol_leverage, computed_leverage),
+            )
+        else:
+            leverage = max(
+                config.min_symbol_leverage,
+                min(config.max_symbol_leverage, int(config.effective_leverage_target * 2)),
+            )
+
+        # 1. Margin mode switch
+        try:
+            binance_client.set_margin_type(symbol, target_margin)
+        except Exception as exc:
+            reason = f"margin_mode_switch_failed: {exc}"
+            self._log("preflight_fail", symbol, reason)
+            return False, "margin_mode_switch_failed"
+
+        # 2. Leverage setting
+        try:
+            binance_client.set_leverage(symbol=symbol, leverage=leverage)
+        except Exception as exc:
+            # Non-fatal: log but proceed (Binance may already be at correct leverage)
+            self._log("preflight_warn", symbol, f"leverage set warning: {exc}")
+
+        self._log("preflight_ok", symbol,
+                  f"margin={target_margin}, leverage={leverage}x")
+        return True, ""
+
     # ── Main tick ────────────────────────────────────────────────
 
     def tick(
@@ -86,6 +132,7 @@ class ExecutionEngine:
     ) -> Optional[dict[str, Any]]:
         """
         Single execution tick:
+        0. Pre-flight: margin mode + leverage per symbol
         1. Fetch current positions
         2. Compute deltas
         3. Cancel stale orders
@@ -120,6 +167,12 @@ class ExecutionEngine:
         skip_reasons: list[dict[str, str]] = []
 
         for sym, target in targets.items():
+            # Pre-flight: margin mode + leverage
+            pf_ok, pf_reason = self._preflight(sym, config, computed_leverage=target.computed_leverage)
+            if not pf_ok:
+                skip_reasons.append({"symbol": sym, "reason": pf_reason})
+                continue
+
             state = self._get_state(sym)
             current = current_map.get(sym)
 
@@ -294,17 +347,24 @@ class ExecutionEngine:
     # ── Fill handling & bracket management ───────────────────────
 
     def _on_fill(self, symbol: str, side: str, qty: float, config: EngineConfig) -> None:
-        """After a fill, set SL/TP brackets."""
+        """After a fill, set SL/TP brackets based on actual position from Binance."""
         state = self._get_state(symbol)
         try:
-            # Fetch actual entry price from position
+            # Fetch actual position data (qty + entry price)
             positions = binance_client.position_information(symbol=symbol)
             entry_price = 0.0
+            actual_qty = 0.0
+            actual_side = side  # fallback
             for p in positions:
-                if float(p.get("positionAmt", 0)) != 0:
+                amt = float(p.get("positionAmt", 0))
+                if amt != 0:
                     entry_price = float(p.get("entryPrice", 0))
+                    actual_qty = abs(amt)
+                    actual_side = "BUY" if amt > 0 else "SELL"
                     break
-            if entry_price <= 0:
+
+            if entry_price <= 0 or actual_qty <= 0:
+                self._log("bracket_skip", symbol, "No open position found after fill")
                 return
 
             state.last_bracket_entry_price = entry_price
@@ -315,9 +375,9 @@ class ExecutionEngine:
             atr = atr_map.get(symbol, entry_price * 0.02)  # fallback 2%
 
             stop_dist = atr * config.stop_k
-            stop_side = "SELL" if side == "BUY" else "BUY"
+            stop_side = "SELL" if actual_side == "BUY" else "BUY"
 
-            if side == "BUY":
+            if actual_side == "BUY":
                 sl_price = entry_price - stop_dist
                 tp_price = entry_price + stop_dist * 1.5  # TP = 1.5x SL distance
             else:
@@ -378,9 +438,16 @@ class ExecutionEngine:
             self._log("error", symbol, f"Bracket setup failed: {exc}")
 
     def _cancel_brackets(self, symbol: str, state: OrderState) -> None:
-        """Cancel existing SL/TP algo orders for a symbol."""
+        """Cancel ALL existing SL/TP and open orders for a symbol.
+        Ensures no stale bracket or OCO remnant survives a flip/adjust."""
+        # 1. Cancel algo orders (SL/TP)
         try:
             binance_client.cancel_all_algo_orders(symbol=symbol)
+        except Exception:
+            pass
+        # 2. Cancel regular open orders (e.g. limit SL/TP, OCO remnants)
+        try:
+            binance_client.cancel_all_open_orders(symbol=symbol)
         except Exception:
             pass
         state.active_sl_id = None

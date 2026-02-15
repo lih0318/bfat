@@ -157,6 +157,12 @@ export function AutopilotTab() {
     listing_age_days: 90,
     max_spread_pct: 0.15,
     drawdown_kill_pct: 0.15,
+    margin_mode: 'ISOLATED' as string,
+    risk_per_trade_pct: 0.01,
+    max_symbol_leverage: 20,
+    min_symbol_leverage: 1,
+    max_concurrent_symbols: 10,
+    reserve_margin_buffer_pct: 0.10,
     symbol: 'BTCUSDT',
   })
 
@@ -240,6 +246,12 @@ export function AutopilotTab() {
     listing_age_days: Number(config.listing_age_days ?? prev.listing_age_days),
     max_spread_pct: Number(config.max_spread_pct ?? prev.max_spread_pct),
     drawdown_kill_pct: Number(config.drawdown_kill_pct ?? prev.drawdown_kill_pct),
+    margin_mode: String(config.margin_mode ?? prev.margin_mode),
+    risk_per_trade_pct: Number(config.risk_per_trade_pct ?? prev.risk_per_trade_pct),
+    max_symbol_leverage: Number(config.max_symbol_leverage ?? prev.max_symbol_leverage),
+    min_symbol_leverage: Number(config.min_symbol_leverage ?? prev.min_symbol_leverage),
+    max_concurrent_symbols: Number(config.max_concurrent_symbols ?? prev.max_concurrent_symbols),
+    reserve_margin_buffer_pct: Number(config.reserve_margin_buffer_pct ?? prev.reserve_margin_buffer_pct),
     symbol: String(config.symbol ?? prev.symbol),
   })
 
@@ -459,6 +471,49 @@ export function AutopilotTab() {
                   <input type="number" min={1} max={100} step={1}
                     value={Math.round(form.drawdown_kill_pct * 100)}
                     onChange={(e) => setField('drawdown_kill_pct', (Number(e.target.value) || 10) / 100)} />
+                </label>
+              </div>
+            </section>
+
+            {/* Margin / Risk Management */}
+            <section className="config-section">
+              <h4>Margin / Risk Management</h4>
+              <div className="config-row config-row--three">
+                <label>
+                  <span>Margin Mode <Tip text="심볼별 마진 모드. ISOLATED: 심볼별 분리 마진, CROSSED: 공유 마진. 다중 심볼 운용 시 ISOLATED 권장." /></span>
+                  <select value={form.margin_mode} onChange={(e) => setField('margin_mode', e.target.value)}>
+                    <option value="ISOLATED">ISOLATED</option>
+                    <option value="CROSSED">CROSSED</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Risk/Trade (%) <Tip text="거래당 최대 손실 비율. 예: 1 = 자본의 1% 손실 허용. ATR 기반 포지션 사이징에 사용." /></span>
+                  <input type="number" min={0.1} max={10} step={0.1}
+                    value={Math.round(form.risk_per_trade_pct * 1000) / 10}
+                    onChange={(e) => setField('risk_per_trade_pct', (Number(e.target.value) || 1) / 100)} />
+                </label>
+                <label>
+                  <span>Reserve Buffer (%) <Tip text="여유 자금 비율. 예: 10 = 자본의 10%를 예비로 유지. 새 진입 제한에 사용." /></span>
+                  <input type="number" min={0} max={50} step={1}
+                    value={Math.round(form.reserve_margin_buffer_pct * 100)}
+                    onChange={(e) => setField('reserve_margin_buffer_pct', (Number(e.target.value) || 10) / 100)} />
+                </label>
+              </div>
+              <div className="config-row config-row--three">
+                <label>
+                  <span>Max Leverage <Tip text="심볼별 최대 레버리지. 리스크 사이징으로 계산된 레버리지가 이 값을 초과하면 이 값으로 제한." /></span>
+                  <input type="number" min={1} max={125} step={1} value={form.max_symbol_leverage}
+                    onChange={(e) => setField('max_symbol_leverage', Number(e.target.value) || 20)} />
+                </label>
+                <label>
+                  <span>Min Leverage <Tip text="심볼별 최소 레버리지. 계산된 레버리지가 이 값 미만이면 이 값으로 상향 조정." /></span>
+                  <input type="number" min={1} max={125} step={1} value={form.min_symbol_leverage}
+                    onChange={(e) => setField('min_symbol_leverage', Number(e.target.value) || 1)} />
+                </label>
+                <label>
+                  <span>Max Symbols <Tip text="동시 보유 가능한 최대 심볼 수. 초과 시 새 진입이 차단됩니다." /></span>
+                  <input type="number" min={1} max={50} step={1} value={form.max_concurrent_symbols}
+                    onChange={(e) => setField('max_concurrent_symbols', Number(e.target.value) || 10)} />
                 </label>
               </div>
             </section>

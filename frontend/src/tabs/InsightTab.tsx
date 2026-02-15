@@ -181,6 +181,16 @@ export function InsightTab() {
               <span className="kill-status kill-normal">Kill Switch 정상</span>
             )}
           </div>
+          <div className="risk-margin-info" style={{ marginTop: '0.75rem', fontSize: '0.82rem', color: 'var(--text-secondary, #888)' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem 1.5rem' }}>
+              <span>마진모드: <strong style={{ color: risk.margin_mode === 'ISOLATED' ? '#22c55e' : '#f59e0b' }}>{risk.margin_mode || 'N/A'}</strong></span>
+              <span>가용잔고: <strong>${risk.available_balance?.toFixed(2) ?? '0.00'}</strong></span>
+              <span>예약버퍼: <strong>{((risk.reserve_buffer_pct ?? 0) * 100).toFixed(0)}%</strong></span>
+              <span>심볼레버리지: <strong>{risk.max_symbol_leverage ?? 'N/A'}x</strong></span>
+              <span>거래당 리스크: <strong>{((risk.risk_per_trade_pct ?? 0) * 100).toFixed(1)}%</strong></span>
+              <span>최대동시심볼: <strong>{risk.max_concurrent_symbols ?? 'N/A'}</strong></span>
+            </div>
+          </div>
         </section>
       </div>
 

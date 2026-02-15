@@ -137,6 +137,7 @@ class TargetPosition:
     target_qty: float = 0.0  # absolute quantity (always positive)
     target_notional: float = 0.0
     trend_score: float = 0.0
+    computed_leverage: int = 1  # per-symbol leverage determined by risk sizing
 
 
 @dataclass
@@ -161,6 +162,12 @@ def compute_target_positions(
     min_weight_floor: float = 0.02,
     max_weight_cap: float = 0.40,
     current_symbols: set[str] | None = None,
+    # ---- Isolated risk-sizing params ----
+    risk_per_trade_pct: float = 0.01,
+    max_symbol_leverage: int = 20,
+    min_symbol_leverage: int = 1,
+    stop_k: float = 2.0,
+    atr_map: dict[str, float] | None = None,
 ) -> SizingResult:
     """
     Compute target positions for all symbols in the signal universe.
@@ -266,28 +273,45 @@ def compute_target_positions(
 
     result.gross_notional = gross_notional
 
-    # Step 5: target_qty per symbol with exchangeInfo validation
-    for sym, w in normalised.items():
-        notional = gross_notional * abs(w)
-        side = "LONG" if w > 0 else "SHORT"
+    # Step 5: Risk-based sizing per symbol
+    # Two paths:
+    #   A) ATR risk sizing: stop_dist -> risk_budget -> position_size -> leverage
+    #   B) Fallback vol-target sizing (legacy): gross_notional * weight
+    _atr = atr_map or {}
 
-        # Get current price for qty calculation
+    for sym, w in normalised.items():
+        side = "LONG" if w > 0 else "SHORT"
         snap = snapshots.get(sym)
         if not snap:
             continue
 
-        # Use last close from signal (approximate)
-        try:
-            bt = ExchangeInfoCache.get_symbol_filters(sym)
-            # We need current price — use klines endpoint briefly
-            from app.services.binance_client import binance_client
-            klines = binance_client.klines(symbol=sym, interval="1m", limit=1)
-            price = float(klines[-1][4]) if klines else 0.0
-        except Exception:
-            price = 0.0
-
+        price = _get_price(sym)
         if price <= 0:
             continue
+
+        atr_val = _atr.get(sym, 0.0)
+        sym_leverage = min_symbol_leverage  # will be computed
+
+        if atr_val > 0 and risk_per_trade_pct > 0:
+            # Path A: ATR-based risk sizing
+            stop_dist = atr_val * stop_k
+            # risk_budget = equity * risk_per_trade_pct * weight_share
+            risk_budget = equity * risk_per_trade_pct * abs(w)
+            if stop_dist > 0:
+                # position_size (qty) from: qty * stop_dist = risk_budget
+                risk_qty = risk_budget / stop_dist
+                risk_notional = risk_qty * price
+                # Needed leverage = notional / (equity * weight_share_of_margin)
+                margin_share = equity * abs(w) * 0.90  # 10% reserve buffer
+                needed_lev = risk_notional / max(margin_share, 1.0) if margin_share > 0 else 1
+                sym_leverage = max(min_symbol_leverage, min(max_symbol_leverage, int(math.ceil(needed_lev))))
+                notional = min(risk_notional, gross_notional * abs(w))
+            else:
+                notional = gross_notional * abs(w)
+        else:
+            # Path B: vol-target fallback
+            notional = gross_notional * abs(w)
+            sym_leverage = max(min_symbol_leverage, min(max_symbol_leverage, int(math.ceil(leverage_target))))
 
         qty = notional / price
         qty = ExchangeInfoCache.round_quantity(sym, qty)
@@ -304,8 +328,9 @@ def compute_target_positions(
             side=side,
             weight=w,
             target_qty=qty,
-            target_notional=notional,
+            target_notional=qty * price,
             trend_score=snap.final_score,
+            computed_leverage=sym_leverage,
         )
         result.targets[sym] = tp
 

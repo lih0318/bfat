@@ -109,7 +109,31 @@ class EngineConfig(BaseModel):
         description="Max bid-ask spread % to include symbol",
     )
 
-    # ── Risk ─────────────────────────────────────────────────────
+    # ── Margin / Risk ────────────────────────────────────────────
+    margin_mode: Literal["ISOLATED", "CROSSED"] = Field(
+        "ISOLATED",
+        description="Per-symbol margin mode. ISOLATED recommended for multi-symbol safety",
+    )
+    risk_per_trade_pct: float = Field(
+        0.01, gt=0.0, le=0.10,
+        description="Max loss per trade as fraction of equity (e.g. 0.01 = 1%)",
+    )
+    max_symbol_leverage: int = Field(
+        20, ge=1, le=125,
+        description="Per-symbol leverage upper bound (Binance setting)",
+    )
+    min_symbol_leverage: int = Field(
+        1, ge=1, le=125,
+        description="Per-symbol leverage lower bound",
+    )
+    max_concurrent_symbols: int = Field(
+        10, ge=1, le=50,
+        description="Max number of symbols with open positions simultaneously",
+    )
+    reserve_margin_buffer_pct: float = Field(
+        0.10, ge=0.0, le=0.50,
+        description="Fraction of equity to keep as reserve (not used for margin)",
+    )
     drawdown_kill_pct: float = Field(
         0.15, ge=0.01, le=1.0,
         description="Kill switch: stop engine if drawdown exceeds this fraction",
