@@ -450,14 +450,30 @@ class EngineRunner:
         self._exec_count += 1
 
         if not self._sizing_result or not self._sizing_result.targets:
+            # Get detailed reason from sizing if available
+            drop_reason = getattr(self._sizing_result, 'drop_reason', '') if self._sizing_result else 'no_sizing_result'
+            
+            reason_messages = {
+                'zero_equity': 'No equity available',
+                'all_deadzone_or_no_vol': 'All signals in deadzone or missing volatility data',
+                'zero_abs_sum': 'Zero weight sum after normalization',
+                'all_below_min_weight': 'All candidates below minimum weight threshold',
+                'fallback_below_min_notional': 'Even fallback position below minimum order size',
+                'fallback_no_price': 'Fallback failed: price unavailable',
+                'no_signals_for_fallback': 'No viable signals for fallback',
+                'all_filtered_unknown': 'All targets filtered for unknown reason',
+            }
+            
+            detailed_message = reason_messages.get(drop_reason, f'Sizing produced no targets ({drop_reason or "deadzone/top-k/min_weight"})')
+            
             ledger.record(
                 "exec_tick_skip",
                 {
-                    "reason": "no_targets",
-                    "message": "Sizing produced no target positions (deadzone/top-k/min_weight).",
+                    "reason": drop_reason or "no_targets",
+                    "message": detailed_message,
                 },
             )
-            logger.info("exec_tick: no targets, skip")
+            logger.info("exec_tick: no targets, reason=%s", drop_reason or "unknown")
             return
 
         try:
