@@ -39,12 +39,12 @@ class EngineConfig(BaseModel):
     # ── Volatility / Sizing ──────────────────────────────────────
     vol_window: int = Field(60, ge=10, le=365, description="Days for realized-vol estimate")
     target_portfolio_vol: float = Field(
-        0.10, gt=0.0, le=1.0,
+        0.18, gt=0.0, le=1.0,
         description="Annualized target portfolio volatility",
     )
     effective_leverage_target: float = Field(
-        1.0, gt=0.0, le=10.0,
-        description="Soft guide for gross leverage",
+        5.0, gt=0.0, le=20.0,
+        description="Soft guide for gross leverage (portfolio notional / equity)",
     )
 
     # ── Stop / Bracket ───────────────────────────────────────────
@@ -111,7 +111,7 @@ class EngineConfig(BaseModel):
 
     # ── Risk ─────────────────────────────────────────────────────
     drawdown_kill_pct: float = Field(
-        0.10, ge=0.01, le=1.0,
+        0.15, ge=0.01, le=1.0,
         description="Kill switch: stop engine if drawdown exceeds this fraction",
     )
 

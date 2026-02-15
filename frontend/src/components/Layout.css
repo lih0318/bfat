@@ -90,31 +90,59 @@
   .layout-header {
     flex-direction: column;
     align-items: stretch;
-    padding: 0.75rem 1rem;
-    gap: 0.75rem;
+    padding: 0.6rem 0.75rem;
+    gap: 0.5rem;
   }
 
   .layout-title {
-    font-size: 1.1rem;
+    font-size: 1rem;
   }
 
   .layout-tabs {
     display: flex;
     overflow-x: auto;
     flex-wrap: nowrap;
-    gap: 0.4rem;
+    gap: 0.3rem;
     -webkit-overflow-scrolling: touch;
-    padding-bottom: 2px;
+    padding-bottom: 4px;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .layout-tabs::-webkit-scrollbar {
+    display: none;
   }
 
   .layout-tab {
     flex-shrink: 0;
-    min-height: 44px;
-    padding: 0.5rem 1rem;
-    font-size: 0.85rem;
+    min-height: 40px;
+    padding: 0.4rem 0.75rem;
+    font-size: 0.78rem;
+    white-space: nowrap;
   }
 
   .layout-main {
-    padding: 1rem;
+    padding: 0.75rem;
+  }
+}
+
+@media (max-width: 400px) {
+  .layout-header {
+    padding: 0.5rem 0.5rem;
+    gap: 0.4rem;
+  }
+
+  .layout-title {
+    font-size: 0.9rem;
+  }
+
+  .layout-tab {
+    padding: 0.35rem 0.6rem;
+    font-size: 0.72rem;
+    min-height: 36px;
+  }
+
+  .layout-main {
+    padding: 0.5rem;
   }
 }

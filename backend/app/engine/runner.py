@@ -344,9 +344,12 @@ class EngineRunner:
             return
 
         try:
-            # Set leverage for target symbols
+            # Set Binance account leverage for margin efficiency.
+            # Note: Binance leverage ≠ actual exposure. It only determines margin requirement.
+            # Actual risk is controlled by position sizing (effective_leverage_target).
+            # We set Binance leverage high enough to avoid "insufficient margin" errors.
             cfg = self._config
-            max_lev = max(1, int(cfg.effective_leverage_target * 2))
+            max_lev = max(10, min(20, int(cfg.effective_leverage_target * 2)))
             for sym in self._sizing_result.targets:
                 try:
                     binance_client.set_leverage(symbol=sym, leverage=max_lev)

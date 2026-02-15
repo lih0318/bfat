@@ -72,8 +72,8 @@ export function AutopilotTab() {
     signal_tf: '1d' as string,
     deadzone_threshold: 0.10,
     vol_window: 60,
-    target_portfolio_vol: 0.10,
-    effective_leverage_target: 1.0,
+    target_portfolio_vol: 0.18,
+    effective_leverage_target: 5.0,
     stop_k: 2.0,
     execution_tick_sec: 120,
     entry_order_mode: 'IOC_LIMIT' as string,
@@ -88,7 +88,7 @@ export function AutopilotTab() {
     universe_top_n: 20,
     listing_age_days: 90,
     max_spread_pct: 0.15,
-    drawdown_kill_pct: 0.10,
+    drawdown_kill_pct: 0.15,
     symbol: 'BTCUSDT',
   })
 
@@ -372,8 +372,8 @@ export function AutopilotTab() {
                     onChange={(e) => setField('target_portfolio_vol', Number(e.target.value) || 0.1)} />
                 </label>
                 <label>
-                  <span>Leverage Target <Tip text="소프트 레버리지 상한. 총 노출(gross notional)이 자본 × 이 배수를 초과하지 않도록 제한. 예: 1.0 = 1배." /></span>
-                  <input type="number" min={0.1} max={10} step={0.1} value={form.effective_leverage_target}
+                  <span>Leverage Target <Tip text="포트폴리오 총 노출 배수 (gross notional / equity). 예: 5 = 자본의 5배까지 노출. 바이낸스 계좌 레버리지는 마진 효율을 위해 별도로 10~20배 자동 설정됩니다." /></span>
+                  <input type="number" min={0.5} max={20} step={0.5} value={form.effective_leverage_target}
                     onChange={(e) => setField('effective_leverage_target', Number(e.target.value) || 1)} />
                 </label>
                 <label>

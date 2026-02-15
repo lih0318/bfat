@@ -8,15 +8,18 @@ from typing import Any
 
 # ── Preset dictionaries ──────────────────────────────────────────
 
+# ── Conservative ─────────────────────────────────────────────────
+# 안정 우선. 레버리지 3배, 넓은 손절, 느린 실행, 분산 적음.
+# 바이낸스 계좌 레버리지: 10배 (마진 효율), 실제 노출: 자본의 ~3배.
 CONSERVATIVE: dict[str, Any] = {
     "signal_tf": "1d",
     "horizons": [30, 90, 365],
     "deadzone_threshold": 0.15,
     "vol_window": 60,
-    "target_portfolio_vol": 0.06,
-    "effective_leverage_target": 0.5,
+    "target_portfolio_vol": 0.12,
+    "effective_leverage_target": 3.0,
     "stop_atr_window": 14,
-    "stop_k": 3.0,
+    "stop_k": 2.5,
     "trailing_stop": False,
     "execution_tick_sec": 300,
     "execution_threshold_pct": 0.03,
@@ -36,16 +39,19 @@ CONSERVATIVE: dict[str, Any] = {
     "universe_top_n": 10,
     "listing_age_days": 180,
     "max_spread_pct": 0.10,
-    "drawdown_kill_pct": 0.07,
+    "drawdown_kill_pct": 0.10,
 }
 
+# ── Balanced ─────────────────────────────────────────────────────
+# 수익-리스크 균형. 레버리지 5배, 표준 손절, 중간 속도.
+# 바이낸스 계좌 레버리지: 10배, 실제 노출: 자본의 ~5배.
 BALANCED: dict[str, Any] = {
     "signal_tf": "1d",
     "horizons": [30, 90, 365],
     "deadzone_threshold": 0.10,
     "vol_window": 60,
-    "target_portfolio_vol": 0.10,
-    "effective_leverage_target": 1.0,
+    "target_portfolio_vol": 0.18,
+    "effective_leverage_target": 5.0,
     "stop_atr_window": 14,
     "stop_k": 2.0,
     "trailing_stop": False,
@@ -67,16 +73,19 @@ BALANCED: dict[str, Any] = {
     "universe_top_n": 20,
     "listing_age_days": 90,
     "max_spread_pct": 0.15,
-    "drawdown_kill_pct": 0.10,
+    "drawdown_kill_pct": 0.15,
 }
 
+# ── Aggressive ───────────────────────────────────────────────────
+# 수익 극대화. 레버리지 10배, 타이트 손절, 빠른 실행, 넓은 분산.
+# 바이낸스 계좌 레버리지: 20배, 실제 노출: 자본의 ~10배.
 AGGRESSIVE: dict[str, Any] = {
     "signal_tf": "4h",
     "horizons": [30, 90, 365],
     "deadzone_threshold": 0.05,
     "vol_window": 30,
-    "target_portfolio_vol": 0.20,
-    "effective_leverage_target": 2.0,
+    "target_portfolio_vol": 0.30,
+    "effective_leverage_target": 10.0,
     "stop_atr_window": 10,
     "stop_k": 1.5,
     "trailing_stop": True,
@@ -98,7 +107,7 @@ AGGRESSIVE: dict[str, Any] = {
     "universe_top_n": 30,
     "listing_age_days": 60,
     "max_spread_pct": 0.20,
-    "drawdown_kill_pct": 0.15,
+    "drawdown_kill_pct": 0.25,
 }
 
 PROFILES: dict[str, dict[str, Any]] = {

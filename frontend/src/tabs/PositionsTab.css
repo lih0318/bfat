@@ -116,12 +116,46 @@
 }
 
 @media (max-width: 768px) {
+  .positions-heading {
+    font-size: 1.05rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .positions-section {
+    margin-bottom: 1.25rem;
+  }
+
+  .positions-table {
+    font-size: 0.8rem;
+    min-width: 600px;
+  }
+
   .positions-table th,
   .positions-table td {
-    padding: 0.6rem 0.75rem;
+    padding: 0.5rem 0.6rem;
+  }
+
+  .positions-table th {
+    font-size: 0.7rem;
   }
 
   .positions-table tfoot .positions-total-row td {
-    padding: 0.6rem 0.75rem;
+    padding: 0.5rem 0.6rem;
+  }
+}
+
+@media (max-width: 400px) {
+  .positions-heading {
+    font-size: 0.95rem;
+  }
+
+  .positions-table {
+    font-size: 0.72rem;
+    min-width: 520px;
+  }
+
+  .positions-table th,
+  .positions-table td {
+    padding: 0.35rem 0.45rem;
   }
 }
