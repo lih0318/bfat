@@ -486,13 +486,28 @@ class ExecutionEngine:
             self._log("error", symbol, f"Bracket setup failed: {exc}")
 
     def on_ws_fill(self, fill: dict[str, Any], config: EngineConfig) -> None:
-        """Handle WebSocket fill event: detect TP1/TP2 fills and manage state transitions."""
+        """Handle WebSocket fill event: detect entry fill (setup brackets) or TP1/TP2/SL fills."""
         symbol = fill.get("symbol", "")
         client_id = fill.get("client_id", "")
         if not symbol or not client_id:
             return
 
         state = self._get_state(symbol)
+
+        # Entry fill: pending order filled via WebSocket → set up brackets
+        if state.pending_order_id and client_id == state.pending_order_id:
+            side = fill.get("side", "") or state.pending_side or ""
+            filled_qty = float(fill.get("filled_qty", 0) or 0)
+            if side and filled_qty > 0:
+                try:
+                    self._on_fill(symbol, side, filled_qty, config)
+                except Exception as exc:
+                    self._log("error", symbol, f"Bracket setup on WS fill failed: {exc}")
+            state.pending_order_id = None
+            state.pending_side = None
+            state.pending_qty = 0.0
+            state.pending_placed_at = 0.0
+            return
 
         # Check if this fill is our TP1
         if state.active_tp1_id and client_id == state.active_tp1_id and not state.tp1_done:

@@ -251,6 +251,14 @@ export const api = {
   },
 }
 
+export interface PaperPosition {
+  symbol: string
+  side: string
+  qty: number
+  entry_price: number
+  [key: string]: unknown
+}
+
 export interface JournalEntry {
   id?: string
   ts: string

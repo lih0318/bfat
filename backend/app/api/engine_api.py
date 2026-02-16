@@ -26,6 +26,7 @@ from app.engine.datafeed import fetch_atr_map, fetch_vol_map
 from app.engine.profiles import PROFILES, apply_profile
 from app.engine.runner import engine
 from app.engine.signals import generate_reasoning
+from app.services.binance_client import binance_client
 
 router = APIRouter()
 
@@ -280,7 +281,71 @@ def insight() -> dict[str, Any]:
 # ── NEW: Bracket states (live SL/TP for Positions tab) ───────
 
 
+def _bracket_fallback_from_algo_orders(
+    symbol: str, entry_price: float, position_side: str
+) -> dict[str, Any] | None:
+    """Build bracket state from Binance open algo orders for one symbol. Returns None on error or no algos."""
+    try:
+        if not binance_client.is_configured():
+            return None
+        orders = binance_client.get_open_algo_orders(symbol)
+    except Exception:
+        return None
+    sl_price = 0.0
+    tp_prices: list[float] = []
+    for o in orders:
+        order_type = (o.get("orderType") or o.get("type") or "").upper()
+        trigger_str = o.get("triggerPrice") or o.get("trigger_price") or "0"
+        try:
+            trigger = float(trigger_str)
+        except (TypeError, ValueError):
+            continue
+        if "STOP_MARKET" in order_type or order_type == "STOP":
+            sl_price = trigger
+        elif "TAKE_PROFIT" in order_type or "TAKE_PROFIT_MARKET" in order_type:
+            tp_prices.append(trigger)
+    if sl_price <= 0 and not tp_prices:
+        return None
+    # Long: TP above entry, sort ascending (closer = TP1). Short: TP below entry, sort descending (closer = TP1).
+    is_long = position_side and position_side.upper() in ("LONG", "BUY")
+    tp_prices.sort(reverse=not is_long)
+    tp1_price = float(tp_prices[0]) if len(tp_prices) > 0 else 0.0
+    tp2_price = float(tp_prices[1]) if len(tp_prices) > 1 else 0.0
+    return {
+        "sl_price": sl_price,
+        "tp1_price": tp1_price,
+        "tp2_price": tp2_price,
+        "tp1_done": False,
+        "tp2_done": False,
+        "be_moved": False,
+        "entry_price": entry_price,
+        "initial_r": 0.0,
+        "position_side": position_side,
+    }
+
+
 @router.get("/brackets")
 def brackets() -> dict[str, Any]:
-    """Return live bracket states (SL/TP1/TP2/BE) for all tracked symbols."""
-    return engine._execution.get_all_bracket_states()
+    """Return live bracket states (SL/TP1/TP2/BE) for all tracked symbols. Falls back to Binance algo orders for symbols without engine state."""
+    result = dict(engine._execution.get_all_bracket_states())
+    try:
+        if not binance_client.is_configured():
+            return result
+        positions_raw = binance_client.position_information(symbol=None)
+    except Exception:
+        return result
+    for p in positions_raw:
+        amt = float(p.get("positionAmt") or p.get("position_amt") or 0)
+        if amt == 0:
+            continue
+        symbol = (p.get("symbol") or "").strip()
+        if not symbol:
+            continue
+        if symbol in result and ((result[symbol].get("sl_price") or 0) > 0 or (result[symbol].get("tp1_price") or 0) > 0):
+            continue
+        entry_price = float(p.get("entryPrice") or p.get("entry_price") or 0)
+        position_side = "BUY" if amt > 0 else "SELL"
+        fallback = _bracket_fallback_from_algo_orders(symbol, entry_price, position_side)
+        if fallback:
+            result[symbol] = fallback
+    return result
