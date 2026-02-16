@@ -115,6 +115,57 @@
   color: #3fb950;
 }
 
+.tp-done {
+  opacity: 0.5;
+  text-decoration: line-through;
+}
+
+.sl-be {
+  color: #d29922;
+}
+
+.be-badge {
+  display: inline-block;
+  font-size: 0.7em;
+  font-weight: 700;
+  color: #d29922;
+  margin-left: 0.25rem;
+  vertical-align: super;
+}
+
+.bracket-status {
+  white-space: nowrap;
+}
+
+.bracket-badge {
+  display: inline-block;
+  font-size: 0.72em;
+  font-weight: 600;
+  padding: 0.15em 0.45em;
+  border-radius: 4px;
+  margin-right: 0.25rem;
+}
+
+.bracket-badge--active {
+  background: rgba(56, 139, 253, 0.15);
+  color: #58a6ff;
+}
+
+.bracket-badge--be {
+  background: rgba(210, 153, 34, 0.15);
+  color: #d29922;
+}
+
+.bracket-badge--tp1done {
+  background: rgba(63, 185, 80, 0.15);
+  color: #3fb950;
+}
+
+.bracket-badge--tp2done {
+  background: rgba(63, 185, 80, 0.25);
+  color: #3fb950;
+}
+
 @media (max-width: 768px) {
   .positions-heading {
     font-size: 1.05rem;

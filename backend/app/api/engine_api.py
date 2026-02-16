@@ -70,6 +70,13 @@ class EngineConfigUpdate(BaseModel):
     min_symbol_leverage: int | None = None
     max_concurrent_symbols: int | None = None
     reserve_margin_buffer_pct: float | None = None
+    chandelier_atr_mult: float | None = None
+    tp1_r_multiple: float | None = None
+    tp2_r_multiple: float | None = None
+    tp1_close_pct: float | None = None
+    tp2_close_pct: float | None = None
+    breakeven_after_tp1: bool | None = None
+    breakeven_offset_bps: int | None = None
     symbol: str | None = None
 
 
@@ -268,3 +275,12 @@ def insight() -> dict[str, Any]:
     insight_data["portfolio"] = portfolio_data
     
     return insight_data
+
+
+# ── NEW: Bracket states (live SL/TP for Positions tab) ───────
+
+
+@router.get("/brackets")
+def brackets() -> dict[str, Any]:
+    """Return live bracket states (SL/TP1/TP2/BE) for all tracked symbols."""
+    return engine._execution.get_all_bracket_states()

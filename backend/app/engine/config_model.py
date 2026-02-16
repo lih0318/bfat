@@ -52,6 +52,36 @@ class EngineConfig(BaseModel):
     stop_k: float = Field(2.0, gt=0.0, le=10.0, description="Stop = entry ± k × ATR")
     trailing_stop: bool = Field(False, description="Enable trailing stop")
 
+    # ── Chandelier / Partial TP ──────────────────────────────────
+    chandelier_atr_mult: float = Field(
+        3.0, gt=0.0, le=10.0,
+        description="Chandelier SL = entry ± mult × ATR (replaces fixed stop_k for brackets)",
+    )
+    tp1_r_multiple: float = Field(
+        1.0, gt=0.0, le=10.0,
+        description="TP1 distance as multiple of SL distance (1R)",
+    )
+    tp2_r_multiple: float = Field(
+        2.0, gt=0.0, le=20.0,
+        description="TP2 distance as multiple of SL distance (2R)",
+    )
+    tp1_close_pct: float = Field(
+        0.50, gt=0.0, le=1.0,
+        description="Fraction of position to close at TP1 (e.g. 0.50 = 50%)",
+    )
+    tp2_close_pct: float = Field(
+        1.0, gt=0.0, le=1.0,
+        description="Fraction of remaining position to close at TP2 (1.0 = all remaining)",
+    )
+    breakeven_after_tp1: bool = Field(
+        True,
+        description="Move SL to breakeven (+offset) after TP1 is filled",
+    )
+    breakeven_offset_bps: int = Field(
+        10, ge=0, le=100,
+        description="Breakeven offset in basis points above/below entry (e.g. 10 = 0.1%)",
+    )
+
     # ── Execution ────────────────────────────────────────────────
     execution_tick_sec: int = Field(
         120, ge=60, le=300,

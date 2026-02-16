@@ -46,6 +46,13 @@ CONSERVATIVE: dict[str, Any] = {
     "min_symbol_leverage": 1,
     "max_concurrent_symbols": 5,
     "reserve_margin_buffer_pct": 0.15,
+    "chandelier_atr_mult": 3.5,
+    "tp1_r_multiple": 1.0,
+    "tp2_r_multiple": 2.5,
+    "tp1_close_pct": 0.50,
+    "tp2_close_pct": 1.0,
+    "breakeven_after_tp1": True,
+    "breakeven_offset_bps": 15,
 }
 
 # ── Balanced ─────────────────────────────────────────────────────
@@ -86,6 +93,13 @@ BALANCED: dict[str, Any] = {
     "min_symbol_leverage": 2,
     "max_concurrent_symbols": 8,
     "reserve_margin_buffer_pct": 0.10,
+    "chandelier_atr_mult": 3.0,
+    "tp1_r_multiple": 1.0,
+    "tp2_r_multiple": 2.0,
+    "tp1_close_pct": 0.50,
+    "tp2_close_pct": 1.0,
+    "breakeven_after_tp1": True,
+    "breakeven_offset_bps": 10,
 }
 
 # ── Aggressive ───────────────────────────────────────────────────
@@ -126,6 +140,13 @@ AGGRESSIVE: dict[str, Any] = {
     "min_symbol_leverage": 3,
     "max_concurrent_symbols": 12,
     "reserve_margin_buffer_pct": 0.05,
+    "chandelier_atr_mult": 2.5,
+    "tp1_r_multiple": 1.0,
+    "tp2_r_multiple": 1.8,
+    "tp1_close_pct": 0.40,
+    "tp2_close_pct": 1.0,
+    "breakeven_after_tp1": True,
+    "breakeven_offset_bps": 5,
 }
 
 PROFILES: dict[str, dict[str, Any]] = {

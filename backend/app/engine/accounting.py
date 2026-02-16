@@ -187,7 +187,9 @@ class AccountingLedger:
         """Get recent events as activity log entries (for UI)."""
         self._load()
         result: list[dict[str, Any]] = []
-        live_types = ("fill", "exit", "order", "exec_tick_skip", "exec_tick_summary")
+        live_types = ("fill", "exit", "order", "exec_tick_skip", "exec_tick_summary",
+                      "tp1_filled", "tp2_filled", "sl_moved_to_breakeven", "sl_triggered",
+                      "chandelier_sl_updated")
         for ev in reversed(self._events):
             if len(result) >= limit:
                 break
@@ -234,6 +236,16 @@ class AccountingLedger:
             return f"Equity: {ev.get('equity', 0):.2f} USDT"
         if et == "funding":
             return f"Funding {sym}: {ev.get('amount', 0):.4f} USDT"
+        if et == "tp1_filled":
+            return f"TP1 체결 {sym} @ {ev.get('message', '')}"
+        if et == "tp2_filled":
+            return f"TP2 체결 {sym} @ {ev.get('message', '')}"
+        if et == "sl_moved_to_breakeven":
+            return f"SL → BE 전환 {sym}: {ev.get('message', '')}"
+        if et == "sl_triggered":
+            return f"SL 트리거 {sym} @ {ev.get('message', '')}"
+        if et == "chandelier_sl_updated":
+            return f"Chandelier SL 갱신 {sym}: {ev.get('message', '')}"
         return f"{et}: {sym}"
 
     def clear(self) -> None:

@@ -163,6 +163,13 @@ export function AutopilotTab() {
     min_symbol_leverage: 1,
     max_concurrent_symbols: 10,
     reserve_margin_buffer_pct: 0.10,
+    chandelier_atr_mult: 3.0,
+    tp1_r_multiple: 1.0,
+    tp2_r_multiple: 2.0,
+    tp1_close_pct: 0.50,
+    tp2_close_pct: 1.0,
+    breakeven_after_tp1: true,
+    breakeven_offset_bps: 10,
     symbol: 'BTCUSDT',
   })
 
@@ -252,6 +259,13 @@ export function AutopilotTab() {
     min_symbol_leverage: Number(config.min_symbol_leverage ?? prev.min_symbol_leverage),
     max_concurrent_symbols: Number(config.max_concurrent_symbols ?? prev.max_concurrent_symbols),
     reserve_margin_buffer_pct: Number(config.reserve_margin_buffer_pct ?? prev.reserve_margin_buffer_pct),
+    chandelier_atr_mult: Number(config.chandelier_atr_mult ?? prev.chandelier_atr_mult),
+    tp1_r_multiple: Number(config.tp1_r_multiple ?? prev.tp1_r_multiple),
+    tp2_r_multiple: Number(config.tp2_r_multiple ?? prev.tp2_r_multiple),
+    tp1_close_pct: Number(config.tp1_close_pct ?? prev.tp1_close_pct),
+    tp2_close_pct: Number(config.tp2_close_pct ?? prev.tp2_close_pct),
+    breakeven_after_tp1: Boolean(config.breakeven_after_tp1 ?? prev.breakeven_after_tp1),
+    breakeven_offset_bps: Number(config.breakeven_offset_bps ?? prev.breakeven_offset_bps),
     symbol: String(config.symbol ?? prev.symbol),
   })
 
@@ -473,6 +487,52 @@ export function AutopilotTab() {
                     onChange={(e) => setField('drawdown_kill_pct', (Number(e.target.value) || 10) / 100)} />
                 </label>
               </div>
+            </section>
+
+            {/* Chandelier / Partial Take-Profit */}
+            <section className="config-section">
+              <h4>SL/TP (Chandelier Exit)</h4>
+              <div className="config-row config-row--three">
+                <label>
+                  <span>Chandelier ATR 배수 <Tip text="Chandelier SL 거리 = 이 배수 × ATR. 높을수록 넓은 손절. 기존 Stop K와 별개로 브래킷 SL/TP에 적용. 기본 3.0." /></span>
+                  <input type="number" min={0.5} max={10} step={0.1} value={form.chandelier_atr_mult}
+                    onChange={(e) => setField('chandelier_atr_mult', Number(e.target.value) || 3)} />
+                </label>
+                <label>
+                  <span>TP1 거리 (R 배수) <Tip text="TP1 = SL 거리 × 이 배수. 1R은 손절 거리와 동일. 기본 1.0R." /></span>
+                  <input type="number" min={0.1} max={10} step={0.1} value={form.tp1_r_multiple}
+                    onChange={(e) => setField('tp1_r_multiple', Number(e.target.value) || 1)} />
+                </label>
+                <label>
+                  <span>TP2 거리 (R 배수) <Tip text="TP2 = SL 거리 × 이 배수. 기본 2.0R. TP1 이후 잔여 물량의 최종 목표." /></span>
+                  <input type="number" min={0.1} max={20} step={0.1} value={form.tp2_r_multiple}
+                    onChange={(e) => setField('tp2_r_multiple', Number(e.target.value) || 2)} />
+                </label>
+              </div>
+              <div className="config-row config-row--three">
+                <label>
+                  <span>TP1 청산 비율 (%) <Tip text="TP1 도달 시 포지션의 몇 %를 청산할지. 50 = 절반 익절. 기본 50%." /></span>
+                  <input type="number" min={1} max={100} step={1}
+                    value={Math.round(form.tp1_close_pct * 100)}
+                    onChange={(e) => setField('tp1_close_pct', (Number(e.target.value) || 50) / 100)} />
+                </label>
+                <label>
+                  <span>TP2 청산 비율 (%) <Tip text="TP2 도달 시 잔여 물량의 몇 %를 청산할지. 100 = 잔여 전량 청산. 기본 100%." /></span>
+                  <input type="number" min={1} max={100} step={1}
+                    value={Math.round(form.tp2_close_pct * 100)}
+                    onChange={(e) => setField('tp2_close_pct', (Number(e.target.value) || 100) / 100)} />
+                </label>
+                <label>
+                  <span>BE Offset (bps) <Tip text="TP1 체결 후 SL을 본절가 + 이 값으로 이동. 10bps = 0.1%. 기본 10bps." /></span>
+                  <input type="number" min={0} max={100} step={1} value={form.breakeven_offset_bps}
+                    onChange={(e) => setField('breakeven_offset_bps', Number(e.target.value) || 10)} />
+                </label>
+              </div>
+              <label className="config-checkbox">
+                <input type="checkbox" checked={form.breakeven_after_tp1}
+                  onChange={(e) => setField('breakeven_after_tp1', e.target.checked)} />
+                <span>TP1 체결 후 SL → 본절(BE) 이동 <Tip text="TP1이 체결되면 SL을 진입가(+offset)로 자동 상향. 손실 없는 포지션으로 전환." /></span>
+              </label>
             </section>
 
             {/* Margin / Risk Management */}

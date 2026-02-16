@@ -33,7 +33,7 @@ STALE_ORDER_SEC = 120
 
 @dataclass
 class OrderState:
-    """Per-symbol order tracking."""
+    """Per-symbol order tracking with partial TP state machine."""
     symbol: str
     pending_order_id: Optional[str] = None
     pending_side: Optional[str] = None
@@ -41,8 +41,19 @@ class OrderState:
     pending_placed_at: float = 0.0
     filled_qty: float = 0.0
     active_sl_id: Optional[str] = None
-    active_tp_id: Optional[str] = None
+    active_tp1_id: Optional[str] = None
+    active_tp2_id: Optional[str] = None
     last_bracket_entry_price: float = 0.0
+    # Chandelier / partial TP state
+    initial_qty: float = 0.0
+    initial_r: float = 0.0  # SL distance in price units (1R)
+    position_side: Optional[str] = None  # "BUY" or "SELL"
+    tp1_done: bool = False
+    tp2_done: bool = False
+    sl_price: float = 0.0
+    tp1_price: float = 0.0
+    tp2_price: float = 0.0
+    be_moved: bool = False
 
 
 class ExecutionEngine:
@@ -57,6 +68,12 @@ class ExecutionEngine:
     def activity_log(self) -> list[dict[str, Any]]:
         return list(self._activity)
 
+    # Event types that should also be forwarded to the accounting ledger
+    _LEDGER_EVENT_TYPES = frozenset({
+        "tp1_filled", "tp2_filled", "sl_moved_to_breakeven",
+        "sl_triggered", "chandelier_sl_updated",
+    })
+
     def _log(self, typ: str, symbol: str, msg: str, **extra: Any) -> None:
         from datetime import datetime, timezone
         entry = {
@@ -70,6 +87,14 @@ class ExecutionEngine:
         if len(self._activity) > self._max_activity:
             self._activity = self._activity[-self._max_activity:]
         logger.info("[exec] %s %s: %s", typ, symbol, msg)
+
+        # Forward certain events to accounting ledger for Activity/Insight visibility
+        if typ in self._LEDGER_EVENT_TYPES:
+            try:
+                from app.engine.accounting import ledger
+                ledger.record(typ, {"symbol": symbol, "message": msg, **extra})
+            except Exception:
+                pass
 
     def _get_state(self, symbol: str) -> OrderState:
         if symbol not in self._states:
@@ -347,14 +372,14 @@ class ExecutionEngine:
     # ── Fill handling & bracket management ───────────────────────
 
     def _on_fill(self, symbol: str, side: str, qty: float, config: EngineConfig) -> None:
-        """After a fill, set SL/TP brackets based on actual position from Binance."""
+        """After an entry fill, set Chandelier SL + TP1/TP2 partial brackets."""
         state = self._get_state(symbol)
         try:
-            # Fetch actual position data (qty + entry price)
+            # Fetch actual position data
             positions = binance_client.position_information(symbol=symbol)
             entry_price = 0.0
             actual_qty = 0.0
-            actual_side = side  # fallback
+            actual_side = side
             for p in positions:
                 amt = float(p.get("positionAmt", 0))
                 if amt != 0:
@@ -368,29 +393,47 @@ class ExecutionEngine:
                 return
 
             state.last_bracket_entry_price = entry_price
+            state.position_side = actual_side
+            state.initial_qty = actual_qty
+            state.tp1_done = False
+            state.tp2_done = False
+            state.be_moved = False
 
-            # Compute ATR for stop distance
+            # Compute ATR for Chandelier stop
             from app.engine.datafeed import fetch_atr_map
             atr_map = fetch_atr_map([symbol], config.signal_tf, config.stop_atr_window)
-            atr = atr_map.get(symbol, entry_price * 0.02)  # fallback 2%
+            atr = atr_map.get(symbol, entry_price * 0.02)
 
-            stop_dist = atr * config.stop_k
+            # Chandelier SL distance (1R)
+            sl_dist = atr * config.chandelier_atr_mult
+            state.initial_r = sl_dist
             stop_side = "SELL" if actual_side == "BUY" else "BUY"
 
+            # Calculate prices
             if actual_side == "BUY":
-                sl_price = entry_price - stop_dist
-                tp_price = entry_price + stop_dist * 1.5  # TP = 1.5x SL distance
+                sl_price = entry_price - sl_dist
+                tp1_price = entry_price + sl_dist * config.tp1_r_multiple
+                tp2_price = entry_price + sl_dist * config.tp2_r_multiple
             else:
-                sl_price = entry_price + stop_dist
-                tp_price = entry_price - stop_dist * 1.5
+                sl_price = entry_price + sl_dist
+                tp1_price = entry_price - sl_dist * config.tp1_r_multiple
+                tp2_price = entry_price - sl_dist * config.tp2_r_multiple
 
             sl_price = ExchangeInfoCache.round_price(symbol, sl_price)
-            tp_price = ExchangeInfoCache.round_price(symbol, tp_price)
+            tp1_price = ExchangeInfoCache.round_price(symbol, tp1_price)
+            tp2_price = ExchangeInfoCache.round_price(symbol, tp2_price)
+            state.sl_price = sl_price
+            state.tp1_price = tp1_price
+            state.tp2_price = tp2_price
 
             # Cancel old brackets
             self._cancel_brackets(symbol, state)
 
-            # Place SL
+            # TP1 qty / TP2 qty
+            tp1_qty = ExchangeInfoCache.round_quantity(symbol, actual_qty * config.tp1_close_pct)
+            tp2_qty = ExchangeInfoCache.round_quantity(symbol, (actual_qty - tp1_qty) * config.tp2_close_pct)
+
+            # Place SL (full position via closePosition)
             sl_id = f"eng_sl_{uuid.uuid4().hex[:8]}"
             try:
                 binance_client.new_algo_order_close_position(
@@ -398,44 +441,164 @@ class ExecutionEngine:
                     trigger_price=sl_price, client_algo_id=sl_id,
                 )
                 state.active_sl_id = sl_id
-            except Exception as e1:
-                # Fallback: try with quantity
+            except Exception:
                 try:
-                    pos_qty = ExchangeInfoCache.round_quantity(symbol, qty)
                     binance_client.new_algo_order(
                         symbol=symbol, side=stop_side, order_type="STOP_MARKET",
-                        trigger_price=sl_price, quantity=pos_qty, reduce_only=True,
+                        trigger_price=sl_price, quantity=actual_qty, reduce_only=True,
                         client_algo_id=sl_id,
                     )
                     state.active_sl_id = sl_id
                 except Exception as e2:
                     self._log("error", symbol, f"SL failed: {e2}")
 
-            # Place TP
-            tp_id = f"eng_tp_{uuid.uuid4().hex[:8]}"
-            try:
-                binance_client.new_algo_order_close_position(
-                    symbol=symbol, side=stop_side, order_type="TAKE_PROFIT_MARKET",
-                    trigger_price=tp_price, client_algo_id=tp_id,
-                )
-                state.active_tp_id = tp_id
-            except Exception as e1:
+            # Place TP1 (partial qty)
+            if tp1_qty > 0:
+                tp1_id = f"eng_tp1_{uuid.uuid4().hex[:8]}"
                 try:
-                    pos_qty = ExchangeInfoCache.round_quantity(symbol, qty)
                     binance_client.new_algo_order(
                         symbol=symbol, side=stop_side, order_type="TAKE_PROFIT_MARKET",
-                        trigger_price=tp_price, quantity=pos_qty, reduce_only=True,
-                        client_algo_id=tp_id,
+                        trigger_price=tp1_price, quantity=tp1_qty, reduce_only=True,
+                        client_algo_id=tp1_id,
                     )
-                    state.active_tp_id = tp_id
-                except Exception as e2:
-                    self._log("error", symbol, f"TP failed: {e2}")
+                    state.active_tp1_id = tp1_id
+                except Exception as e:
+                    self._log("error", symbol, f"TP1 failed: {e}")
+
+            # Place TP2 (remaining qty)
+            if tp2_qty > 0:
+                tp2_id = f"eng_tp2_{uuid.uuid4().hex[:8]}"
+                try:
+                    binance_client.new_algo_order(
+                        symbol=symbol, side=stop_side, order_type="TAKE_PROFIT_MARKET",
+                        trigger_price=tp2_price, quantity=tp2_qty, reduce_only=True,
+                        client_algo_id=tp2_id,
+                    )
+                    state.active_tp2_id = tp2_id
+                except Exception as e:
+                    self._log("error", symbol, f"TP2 failed: {e}")
 
             self._log("bracket", symbol,
-                       f"SL={sl_price:.2f} TP={tp_price:.2f} (entry={entry_price:.2f}, ATR={atr:.2f})")
+                       f"Chandelier SL={sl_price:.2f} TP1={tp1_price:.2f}({tp1_qty:.6f}) "
+                       f"TP2={tp2_price:.2f}({tp2_qty:.6f}) (entry={entry_price:.2f}, ATR={atr:.2f}, 1R={sl_dist:.2f})")
 
         except Exception as exc:
             self._log("error", symbol, f"Bracket setup failed: {exc}")
+
+    def on_ws_fill(self, fill: dict[str, Any], config: EngineConfig) -> None:
+        """Handle WebSocket fill event: detect TP1/TP2 fills and manage state transitions."""
+        symbol = fill.get("symbol", "")
+        client_id = fill.get("client_id", "")
+        if not symbol or not client_id:
+            return
+
+        state = self._get_state(symbol)
+
+        # Check if this fill is our TP1
+        if state.active_tp1_id and client_id == state.active_tp1_id and not state.tp1_done:
+            state.tp1_done = True
+            self._log("tp1_filled", symbol,
+                       f"TP1 filled @ {fill.get('avg_price', 0):.2f}")
+
+            # Move SL to breakeven if configured
+            if config.breakeven_after_tp1 and state.last_bracket_entry_price > 0:
+                self._move_sl_to_breakeven(symbol, state, config)
+
+        # Check if this fill is our TP2
+        elif state.active_tp2_id and client_id == state.active_tp2_id and not state.tp2_done:
+            state.tp2_done = True
+            self._log("tp2_filled", symbol,
+                       f"TP2 filled @ {fill.get('avg_price', 0):.2f}")
+            # Cancel remaining SL since position should be fully closed
+            self._cancel_brackets(symbol, state)
+
+        # Check if this fill is our SL
+        elif state.active_sl_id and client_id == state.active_sl_id:
+            self._log("sl_triggered", symbol,
+                       f"SL triggered @ {fill.get('avg_price', 0):.2f}")
+            # Cancel remaining TP orders
+            self._cancel_brackets(symbol, state)
+
+    def _move_sl_to_breakeven(self, symbol: str, state: OrderState, config: EngineConfig) -> None:
+        """After TP1 fill, cancel old SL and place new one at breakeven + offset."""
+        entry = state.last_bracket_entry_price
+        offset_pct = config.breakeven_offset_bps / 10000.0
+
+        if state.position_side == "BUY":
+            new_sl = entry * (1 + offset_pct)
+            stop_side = "SELL"
+        else:
+            new_sl = entry * (1 - offset_pct)
+            stop_side = "BUY"
+
+        new_sl = ExchangeInfoCache.round_price(symbol, new_sl)
+
+        # Cancel old SL
+        if state.active_sl_id:
+            try:
+                binance_client.cancel_algo_order(client_algo_id=state.active_sl_id)
+            except Exception:
+                pass
+            # Also cancel all algo orders as safety
+            try:
+                binance_client.cancel_all_algo_orders(symbol=symbol)
+            except Exception:
+                pass
+
+        # Place new SL at breakeven
+        sl_id = f"eng_slbe_{uuid.uuid4().hex[:8]}"
+        try:
+            binance_client.new_algo_order_close_position(
+                symbol=symbol, side=stop_side, order_type="STOP_MARKET",
+                trigger_price=new_sl, client_algo_id=sl_id,
+            )
+            state.active_sl_id = sl_id
+        except Exception:
+            try:
+                # Fetch remaining qty
+                positions = binance_client.position_information(symbol=symbol)
+                remain_qty = 0.0
+                for p in positions:
+                    amt = float(p.get("positionAmt", 0))
+                    if amt != 0:
+                        remain_qty = abs(amt)
+                        break
+                if remain_qty > 0:
+                    binance_client.new_algo_order(
+                        symbol=symbol, side=stop_side, order_type="STOP_MARKET",
+                        trigger_price=new_sl, quantity=remain_qty, reduce_only=True,
+                        client_algo_id=sl_id,
+                    )
+                    state.active_sl_id = sl_id
+            except Exception as e:
+                self._log("error", symbol, f"BE SL move failed: {e}")
+
+        # Re-place TP2 if it was cancelled along with the blanket cancel
+        if state.active_tp2_id and not state.tp2_done and state.tp2_price > 0:
+            tp2_id = f"eng_tp2_{uuid.uuid4().hex[:8]}"
+            try:
+                positions = binance_client.position_information(symbol=symbol)
+                remain_qty = 0.0
+                for p in positions:
+                    amt = float(p.get("positionAmt", 0))
+                    if amt != 0:
+                        remain_qty = abs(amt)
+                        break
+                if remain_qty > 0:
+                    remain_qty = ExchangeInfoCache.round_quantity(symbol, remain_qty)
+                    binance_client.new_algo_order(
+                        symbol=symbol, side=stop_side, order_type="TAKE_PROFIT_MARKET",
+                        trigger_price=state.tp2_price, quantity=remain_qty, reduce_only=True,
+                        client_algo_id=tp2_id,
+                    )
+                    state.active_tp2_id = tp2_id
+            except Exception as e:
+                self._log("error", symbol, f"TP2 re-place after BE failed: {e}")
+
+        state.be_moved = True
+        state.sl_price = new_sl
+        self._log("sl_moved_to_breakeven", symbol,
+                   f"SL moved to BE={new_sl:.2f} (entry={entry:.2f}, offset={config.breakeven_offset_bps}bps)")
 
     def _cancel_brackets(self, symbol: str, state: OrderState) -> None:
         """Cancel ALL existing SL/TP and open orders for a symbol.
@@ -451,7 +614,8 @@ class ExecutionEngine:
         except Exception:
             pass
         state.active_sl_id = None
-        state.active_tp_id = None
+        state.active_tp1_id = None
+        state.active_tp2_id = None
 
     def _cancel_stale_orders(self, state: OrderState, config: EngineConfig) -> None:
         """Cancel pending limit orders that are too old."""
@@ -538,6 +702,31 @@ class ExecutionEngine:
         if remainder > 0:
             slices.append(remainder)
         return slices
+
+    def get_bracket_state(self, symbol: str) -> dict[str, Any]:
+        """Return current bracket state for a symbol (for API/UI)."""
+        state = self._states.get(symbol)
+        if not state:
+            return {}
+        return {
+            "sl_price": state.sl_price,
+            "tp1_price": state.tp1_price,
+            "tp2_price": state.tp2_price,
+            "tp1_done": state.tp1_done,
+            "tp2_done": state.tp2_done,
+            "be_moved": state.be_moved,
+            "entry_price": state.last_bracket_entry_price,
+            "initial_r": state.initial_r,
+            "position_side": state.position_side,
+        }
+
+    def get_all_bracket_states(self) -> dict[str, dict[str, Any]]:
+        """Return bracket states for all tracked symbols."""
+        result = {}
+        for sym, state in self._states.items():
+            if state.sl_price > 0 or state.tp1_price > 0:
+                result[sym] = self.get_bracket_state(sym)
+        return result
 
     def reset(self) -> None:
         """Reset all states (e.g. on engine stop)."""

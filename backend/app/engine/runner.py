@@ -562,7 +562,7 @@ class EngineRunner:
     # ── WS callbacks ─────────────────────────────────────────────
 
     def _on_ws_fill(self, fill: dict[str, Any]) -> None:
-        """Handle fill from WebSocket."""
+        """Handle fill from WebSocket – record + forward to execution state machine."""
         ledger.record_fill(
             symbol=fill.get("symbol", ""),
             side=fill.get("side", ""),
@@ -570,6 +570,11 @@ class EngineRunner:
             price=fill.get("avg_price", 0),
             realized_pnl=fill.get("realized_pnl", 0),
         )
+        # Forward to execution engine for TP1/TP2/SL state transitions
+        try:
+            self._execution.on_ws_fill(fill, self._config)
+        except Exception as exc:
+            logger.error("runner: on_ws_fill forwarding error: %s", exc)
 
     def _on_ws_account(self, data: dict[str, Any]) -> None:
         """Handle account update from WebSocket."""

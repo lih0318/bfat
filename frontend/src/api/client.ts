@@ -124,6 +124,18 @@ export interface UniverseScan {
   total_scanned: number
 }
 
+export interface BracketState {
+  sl_price: number
+  tp1_price: number
+  tp2_price: number
+  tp1_done: boolean
+  tp2_done: boolean
+  be_moved: boolean
+  entry_price: number
+  initial_r: number
+  position_side: string | null
+}
+
 export interface InsightData {
   engine_pulse: EnginePulse
   market_summary: MarketSummary
@@ -211,6 +223,7 @@ export const api = {
     portfolio: () => fetchApi<PortfolioItem[]>('/api/autopilot/portfolio'),
     signals: () => fetchApi<SignalItem[]>('/api/autopilot/signals'),
     insight: () => fetchApi<InsightData>('/api/autopilot/insight'),
+    brackets: () => fetchApi<Record<string, BracketState>>('/api/autopilot/brackets'),
   },
   journal: {
     list: (limit?: number, mode?: 'all' | 'live', type?: string) => {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, type JournalEntry } from '../api/client'
+import { api, type BracketState } from '../api/client'
 import './PositionsTab.css'
 
 interface PositionRow {
@@ -10,40 +10,11 @@ interface PositionRow {
   positionAmt: string
   leverage: string
   unrealizedProfit: string
-  slPrice?: string
-  tpPrice?: string
-}
-
-/** Normalize journal side to Long | Short for map key. */
-function normalizeJournalSide(side: string | undefined): 'Long' | 'Short' {
-  const s = (side ?? '').toString().toLowerCase()
-  if (s === 'buy' || s === 'long') return 'Long'
-  return 'Short'
-}
-
-/** Build map: symbol_side -> { sl, tp, entry_price } from journal (most recent entry per symbol+side). */
-function buildSlTpFromJournal(entries: JournalEntry[]): Record<string, { sl?: number; tp?: number; side?: string; entry_price?: number }> {
-  const byKey: Record<string, { sl?: number; tp?: number; side?: string; entry_price?: number }> = {}
-  for (const e of entries) {
-    if (e.type !== 'entry' || !e.symbol) continue
-    if (e.sl == null && e.tp == null) continue
-    const normalizedSide = normalizeJournalSide(e.side)
-    const key = `${e.symbol}_${normalizedSide}`
-    if (!byKey[key]) {
-      byKey[key] = {
-        sl: e.sl,
-        tp: e.tp,
-        side: e.side,
-        entry_price: (e as Record<string, unknown>).entry_price as number | undefined,
-      }
-    }
-  }
-  return byKey
 }
 
 export function PositionsTab() {
   const [positions, setPositions] = useState<PositionRow[]>([])
-  const [journalSlTpBySymbol, setJournalSlTpBySymbol] = useState<Record<string, { sl?: number; tp?: number; side?: string; entry_price?: number }>>({})
+  const [brackets, setBrackets] = useState<Record<string, BracketState>>({})
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -51,9 +22,9 @@ export function PositionsTab() {
     const load = async () => {
       try {
         setError(null)
-        const [pos, journal] = await Promise.all([
+        const [pos, bracketData] = await Promise.all([
           api.positions.list(),
-          api.journal.list(200, 'live'),
+          api.autopilot.brackets().catch(() => ({})),
         ])
         const rows: PositionRow[] = []
         for (const p of pos) {
@@ -74,7 +45,7 @@ export function PositionsTab() {
         }
         if (!cancelled) {
           setPositions(rows)
-          setJournalSlTpBySymbol(buildSlTpFromJournal(Array.isArray(journal) ? journal : []))
+          setBrackets(bracketData as Record<string, BracketState>)
         }
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e))
@@ -88,38 +59,16 @@ export function PositionsTab() {
     }
   }, [])
 
-  const getSlTp = (symbol: string, positionSide: string, entryPriceStr: string): { sl?: string; tp?: string } => {
-    const key = `${symbol}_${positionSide}`
-    const j = journalSlTpBySymbol[key]
-    if (!j) return {}
-    let sl = j.sl
-    let tp = j.tp
-    const entryPrice = Number(entryPriceStr) || j.entry_price || 0
-    // Use entry price to determine which value is SL vs TP.
-    // Long: SL < entry < TP.  Short: TP < entry < SL.
-    if (sl != null && tp != null && entryPrice > 0) {
-      const lower = Math.min(sl, tp)
-      const upper = Math.max(sl, tp)
-      if (positionSide === 'Long') {
-        // SL = the one below entry, TP = the one above entry
-        sl = lower
-        tp = upper
-      } else {
-        // Short: SL = the one above entry, TP = the one below entry
-        sl = upper
-        tp = lower
-      }
-    } else if (sl != null && tp != null) {
-      // Fallback: use relative comparison
-      if (positionSide === 'Long' && sl > tp) {
-        ;[sl, tp] = [tp, sl]
-      } else if (positionSide === 'Short' && sl < tp) {
-        ;[sl, tp] = [tp, sl]
-      }
-    }
+  const getBracketInfo = (symbol: string) => {
+    const b = brackets[symbol]
+    if (!b) return { sl: undefined, tp1: undefined, tp2: undefined, tp1Done: false, tp2Done: false, beMoved: false }
     return {
-      sl: sl != null ? String(sl) : undefined,
-      tp: tp != null ? String(tp) : undefined,
+      sl: b.sl_price > 0 ? b.sl_price : undefined,
+      tp1: b.tp1_price > 0 ? b.tp1_price : undefined,
+      tp2: b.tp2_price > 0 ? b.tp2_price : undefined,
+      tp1Done: b.tp1_done,
+      tp2Done: b.tp2_done,
+      beMoved: b.be_moved,
     }
   }
 
@@ -135,7 +84,7 @@ export function PositionsTab() {
     <div className="positions-tab">
       <section className="positions-section positions-section--live">
         <h2 className="positions-heading">Live — Open Positions</h2>
-        <p className="positions-sub">Leverage = value applied by Rich Man. PnL refreshes every 2s.</p>
+        <p className="positions-sub">SL/TP values are live bracket orders from the engine. Refreshes every 2s.</p>
         {positions.length === 0 ? (
           <p className="positions-empty">No open positions.</p>
         ) : (
@@ -152,18 +101,25 @@ export function PositionsTab() {
                   <th>Leverage (x)</th>
                   <th>Unrealized PnL</th>
                   <th>SL</th>
-                  <th>TP</th>
+                  <th>TP1</th>
+                  <th>TP2</th>
+                  <th>Status</th>
                 </tr>
               </thead>
               <tbody>
                 {positions.map((row) => {
-                  const { sl, tp } = getSlTp(row.symbol, row.side, row.entryPrice)
+                  const b = getBracketInfo(row.symbol)
                   const pnl = parseFloat(row.unrealizedProfit)
                   const amt = Math.abs(parseFloat(row.positionAmt))
                   const notional = Number(row.entryPrice) * amt
                   const lev = Number(row.leverage) || 1
                   const margin = lev > 0 ? notional / lev : notional
                   const pnlPct = margin > 0 ? (pnl / margin) * 100 : 0
+                  // Status badges
+                  const badges: string[] = []
+                  if (b.beMoved) badges.push('BE')
+                  if (b.tp1Done) badges.push('TP1 Done')
+                  if (b.tp2Done) badges.push('TP2 Done')
                   return (
                     <tr key={row.symbol}>
                       <td>{row.symbol}</td>
@@ -177,8 +133,25 @@ export function PositionsTab() {
                         {pnl >= 0 ? '+' : ''}{Number(row.unrealizedProfit).toFixed(2)}
                         <span className="pnl-pct"> ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%)</span>
                       </td>
-                      <td className="sl-tp sl-val">{sl != null ? Number(sl).toFixed(2) : '-'}</td>
-                      <td className="sl-tp tp-val">{tp != null ? Number(tp).toFixed(2) : '-'}</td>
+                      <td className={`sl-tp sl-val${b.beMoved ? ' sl-be' : ''}`}>
+                        {b.sl != null ? b.sl.toFixed(2) : '—'}
+                        {b.beMoved && <span className="be-badge" title="SL moved to breakeven"> BE</span>}
+                      </td>
+                      <td className={`sl-tp tp-val${b.tp1Done ? ' tp-done' : ''}`}>
+                        {b.tp1 != null ? b.tp1.toFixed(2) : '—'}
+                      </td>
+                      <td className={`sl-tp tp-val${b.tp2Done ? ' tp-done' : ''}`}>
+                        {b.tp2 != null ? b.tp2.toFixed(2) : '—'}
+                      </td>
+                      <td className="bracket-status">
+                        {badges.length > 0
+                          ? badges.map((badge) => (
+                              <span key={badge} className={`bracket-badge bracket-badge--${badge.replace(/\s/g, '').toLowerCase()}`}>
+                                {badge}
+                              </span>
+                            ))
+                          : <span className="bracket-badge bracket-badge--active">Active</span>}
+                      </td>
                     </tr>
                   )
                 })}
@@ -191,10 +164,10 @@ export function PositionsTab() {
                     0
                   )
                   const totalMargin = positions.reduce((s, row) => {
-                    const amt = Math.abs(parseFloat(row.positionAmt))
-                    const notional = Number(row.entryPrice) * amt
-                    const lev = Number(row.leverage) || 1
-                    return s + (lev > 0 ? notional / lev : notional)
+                    const a = Math.abs(parseFloat(row.positionAmt))
+                    const n = Number(row.entryPrice) * a
+                    const l = Number(row.leverage) || 1
+                    return s + (l > 0 ? n / l : n)
                   }, 0)
                   const totalPct = totalMargin > 0 ? (totalPnl / totalMargin) * 100 : 0
                   return (
@@ -206,7 +179,7 @@ export function PositionsTab() {
                         {totalPnl >= 0 ? '+' : ''}{totalPnl.toFixed(2)}
                         <span className="pnl-pct"> ({totalPct >= 0 ? '+' : ''}{totalPct.toFixed(2)}%)</span>
                       </td>
-                      <td colSpan={2} />
+                      <td colSpan={4} />
                     </tr>
                   )
                 })()}
