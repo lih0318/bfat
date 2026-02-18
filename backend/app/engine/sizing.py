@@ -168,6 +168,7 @@ def compute_target_positions(
     min_symbol_leverage: int = 1,
     stop_k: float = 2.0,
     atr_map: dict[str, float] | None = None,
+    single_position_full_equity: bool = False,
 ) -> SizingResult:
     """
     Compute target positions for all symbols in the signal universe.
@@ -205,11 +206,11 @@ def compute_target_positions(
         result.drop_reason = "all_deadzone_or_no_vol"
         return result
 
-    # Step 2: Dynamic Top-K selection
-    effective_top_k = top_k
-    if top_k_enabled:
+    # Step 2: Dynamic Top-K selection (alt mode: one position, full equity)
+    effective_top_k = 1 if single_position_full_equity else top_k
+    if top_k_enabled and not single_position_full_equity:
         effective_top_k = _compute_dynamic_top_k(raw_weights, equity, top_k)
-        
+
     if top_k_enabled and len(raw_weights) > effective_top_k:
         sorted_by_abs = sorted(raw_weights.items(), key=lambda x: abs(x[1]), reverse=True)
         current_symbols = current_symbols or set()
@@ -256,20 +257,20 @@ def compute_target_positions(
         scale = 1.0 / abs_sum2
         normalised = {s: w * scale for s, w in normalised.items()}
 
-    # Step 4: gross_notional from vol targeting
-    # gross_notional = equity × target_vol / avg_weighted_vol
-    avg_vol = 0.0
-    for sym, w in normalised.items():
-        sv = vol_map.get(sym, target_vol)
-        avg_vol += abs(w) * sv
-    if avg_vol <= 0:
-        avg_vol = target_vol
-
-    gross_notional = equity * target_vol / avg_vol
-    # Cap by leverage target
+    # Step 4: gross_notional from vol targeting (or full equity when single-position mode)
     max_notional = equity * leverage_target
-    if gross_notional > max_notional:
-        gross_notional = max_notional
+    if single_position_full_equity and len(normalised) == 1:
+        gross_notional = max_notional * 0.95  # 95% of buying power for the single position
+    else:
+        avg_vol = 0.0
+        for sym, w in normalised.items():
+            sv = vol_map.get(sym, target_vol)
+            avg_vol += abs(w) * sv
+        if avg_vol <= 0:
+            avg_vol = target_vol
+        gross_notional = equity * target_vol / avg_vol
+        if gross_notional > max_notional:
+            gross_notional = max_notional
 
     result.gross_notional = gross_notional
 
@@ -292,7 +293,11 @@ def compute_target_positions(
         atr_val = _atr.get(sym, 0.0)
         sym_leverage = min_symbol_leverage  # will be computed
 
-        if atr_val > 0 and risk_per_trade_pct > 0:
+        if single_position_full_equity and len(normalised) == 1:
+            # Single position: use full gross_notional (already set to 95% of max buying power)
+            notional = gross_notional * abs(w)
+            sym_leverage = max(min_symbol_leverage, min(max_symbol_leverage, int(math.ceil(leverage_target))))
+        elif atr_val > 0 and risk_per_trade_pct > 0:
             # Path A: ATR-based risk sizing
             stop_dist = atr_val * stop_k
             # risk_budget = equity * risk_per_trade_pct * weight_share

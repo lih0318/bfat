@@ -418,6 +418,7 @@ class EngineRunner:
                 min_symbol_leverage=cfg.min_symbol_leverage,
                 stop_k=cfg.stop_k,
                 atr_map=_atr_map,
+                single_position_full_equity=(cfg.universe_mode == "alt_only"),
             )
 
             # 5. Risk guard
