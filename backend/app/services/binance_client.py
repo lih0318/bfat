@@ -248,6 +248,7 @@ class BinanceFuturesClient:
             "triggerPrice": self._format_decimal(trigger_price),
             "reduceOnly": "true" if reduce_only else "false",
             "workingType": working_type,
+            "positionSide": "BOTH",
             "recvWindow": recv_window,
             "timestamp": self._timestamp_ms(),
         }
@@ -288,6 +289,7 @@ class BinanceFuturesClient:
             "triggerPrice": self._format_decimal(trigger_price),
             "closePosition": "true",
             "workingType": working_type,
+            "positionSide": "BOTH",
             "recvWindow": recv_window,
             "timestamp": self._timestamp_ms(),
         }

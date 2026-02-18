@@ -264,6 +264,17 @@ class ExecutionEngine:
                 if len(slices) > 1:
                     time.sleep(0.3)  # brief pause between slices
 
+        # Attach brackets to open positions that have none (e.g. after restart or failed _on_fill)
+        for sym, current in current_map.items():
+            state = self._get_state(sym)
+            if state.sl_price > 0 or state.tp1_price > 0 or state.pending_order_id:
+                continue
+            try:
+                side = "BUY" if current["side"] == "LONG" else "SELL"
+                self._on_fill(sym, side, current["qty"], config)
+            except Exception as exc:
+                logger.warning("execution: attach brackets for %s failed: %s", sym, exc)
+
         # Close positions for symbols NOT in targets
         for sym, current in current_map.items():
             if sym not in targets:
@@ -329,7 +340,11 @@ class ExecutionEngine:
                         self._log("order", symbol, f"IOC {side} filled={filled:.6f}/{qty:.6f} @ {price}")
                         self._on_fill(symbol, side, filled, config)
                     else:
-                        self._log("order", symbol, f"IOC {side} unfilled @ {price}")
+                        state.pending_order_id = client_id
+                        state.pending_side = side
+                        state.pending_qty = qty
+                        state.pending_placed_at = time.time()
+                        self._log("order", symbol, f"IOC {side} unfilled @ {price} (pending WS fill)")
 
             elif mode == "POST_ONLY_LIMIT":
                 price = self._get_limit_price(symbol, side)
@@ -373,23 +388,29 @@ class ExecutionEngine:
 
     def _on_fill(self, symbol: str, side: str, qty: float, config: EngineConfig) -> None:
         """After an entry fill, set Chandelier SL + TP1/TP2 partial brackets."""
+        self._log("bracket_setup", symbol, f"Setting brackets side={side} qty={qty}")
         state = self._get_state(symbol)
         try:
-            # Fetch actual position data
-            positions = binance_client.position_information(symbol=symbol)
+            # Fetch actual position data (retry to handle Binance update delay after fill)
             entry_price = 0.0
             actual_qty = 0.0
             actual_side = side
-            for p in positions:
-                amt = float(p.get("positionAmt", 0))
-                if amt != 0:
-                    entry_price = float(p.get("entryPrice", 0))
-                    actual_qty = abs(amt)
-                    actual_side = "BUY" if amt > 0 else "SELL"
+            for attempt in range(4):
+                positions = binance_client.position_information(symbol=symbol)
+                for p in positions:
+                    amt = float(p.get("positionAmt", 0))
+                    if amt != 0:
+                        entry_price = float(p.get("entryPrice", 0))
+                        actual_qty = abs(amt)
+                        actual_side = "BUY" if amt > 0 else "SELL"
+                        break
+                if entry_price > 0 and actual_qty > 0:
                     break
+                if attempt < 3:
+                    time.sleep(0.4)
 
             if entry_price <= 0 or actual_qty <= 0:
-                self._log("bracket_skip", symbol, "No open position found after fill")
+                self._log("bracket_skip", symbol, "No open position found after fill (retries exhausted)")
                 return
 
             state.last_bracket_entry_price = entry_price
@@ -450,7 +471,8 @@ class ExecutionEngine:
                     )
                     state.active_sl_id = sl_id
                 except Exception as e2:
-                    self._log("error", symbol, f"SL failed: {e2}")
+                    self._log("error", symbol, f"SL failed: {e2!r}")
+                    logger.exception("SL algo order failed for %s", symbol)
 
             # Place TP1 (partial qty)
             if tp1_qty > 0:
@@ -463,7 +485,7 @@ class ExecutionEngine:
                     )
                     state.active_tp1_id = tp1_id
                 except Exception as e:
-                    self._log("error", symbol, f"TP1 failed: {e}")
+                    self._log("error", symbol, f"TP1 failed: {e!r}")
 
             # Place TP2 (remaining qty)
             if tp2_qty > 0:
@@ -476,7 +498,7 @@ class ExecutionEngine:
                     )
                     state.active_tp2_id = tp2_id
                 except Exception as e:
-                    self._log("error", symbol, f"TP2 failed: {e}")
+                    self._log("error", symbol, f"TP2 failed: {e!r}")
 
             self._log("bracket", symbol,
                        f"Chandelier SL={sl_price:.2f} TP1={tp1_price:.2f}({tp1_qty:.6f}) "
