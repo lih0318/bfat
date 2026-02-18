@@ -352,6 +352,7 @@ class EngineRunner:
                 top_n=cfg.universe_top_n,
                 listing_age_days=cfg.listing_age_days,
                 max_spread_pct=cfg.max_spread_pct,
+                universe_mode=cfg.universe_mode,
             )
             symbols = self._universe.symbol_names
             if not symbols:

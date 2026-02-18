@@ -132,6 +132,10 @@ class EngineConfig(BaseModel):
     funding_scale_enabled: bool = Field(False, description="Enable funding-rate overlay")
 
     # ── Universe ─────────────────────────────────────────────────
+    universe_mode: Literal["all", "alt_only"] = Field(
+        "all",
+        description="all=기존 전체, alt_only=BTC/ETH 제외 알트만",
+    )
     universe_top_n: int = Field(20, ge=1, le=200, description="Top-N by 24h volume")
     listing_age_days: int = Field(90, ge=0, le=3650, description="Min listing age in days")
     max_spread_pct: float = Field(

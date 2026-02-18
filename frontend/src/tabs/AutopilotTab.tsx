@@ -153,6 +153,7 @@ export function AutopilotTab() {
     rsi_overbought: 70,
     rsi_oversold: 30,
     funding_scale_enabled: false,
+    universe_mode: 'all' as 'all' | 'alt_only',
     universe_top_n: 20,
     listing_age_days: 90,
     max_spread_pct: 0.15,
@@ -249,6 +250,7 @@ export function AutopilotTab() {
     rsi_overbought: Number(config.rsi_overbought ?? prev.rsi_overbought),
     rsi_oversold: Number(config.rsi_oversold ?? prev.rsi_oversold),
     funding_scale_enabled: Boolean(config.funding_scale_enabled ?? prev.funding_scale_enabled),
+    universe_mode: (config.universe_mode === 'alt_only' ? 'alt_only' : 'all') as 'all' | 'alt_only',
     universe_top_n: Number(config.universe_top_n ?? prev.universe_top_n),
     listing_age_days: Number(config.listing_age_days ?? prev.listing_age_days),
     max_spread_pct: Number(config.max_spread_pct ?? prev.max_spread_pct),
@@ -632,6 +634,13 @@ export function AutopilotTab() {
             <section className="config-section">
               <h4>Universe</h4>
               <div className="config-row config-row--three">
+                <label>
+                  <span>Universe Mode <Tip text="기존 방식: BTC/ETH 포함 전체. 알트 위주: BTCUSDT·ETHUSDT 제외, 거래량 상위 알트만(저자본 시 유동성·청산 유리)." /></span>
+                  <select value={form.universe_mode} onChange={(e) => setField('universe_mode', e.target.value as 'all' | 'alt_only')}>
+                    <option value="all">기존 방식 (전체)</option>
+                    <option value="alt_only">알트 위주 (BTC/ETH 제외)</option>
+                  </select>
+                </label>
                 <label>
                   <span>Top N (24h Volume) <Tip text="24시간 거래량 기준 상위 N개 심볼만 거래 대상으로 선정. 높을수록 많은 심볼 포함. 기본 20." /></span>
                   <input type="number" min={1} max={200} value={form.universe_top_n}

@@ -43,10 +43,14 @@ class UniverseResult:
         return {s.symbol: s.liquidity_penalty for s in self.symbols}
 
 
+EXCLUDE_ALT_ONLY = frozenset({"BTCUSDT", "ETHUSDT"})
+
+
 def get_universe(
     top_n: int = 20,
     listing_age_days: int = 90,
     max_spread_pct: float = 0.15,
+    universe_mode: str = "all",
 ) -> UniverseResult:
     """Return filtered universe of tradeable USDT-M perpetual symbols."""
 
@@ -91,6 +95,11 @@ def get_universe(
         key=lambda x: x[1],
         reverse=True,
     )
+    if universe_mode == "alt_only":
+        for sym in EXCLUDE_ALT_ONLY:
+            if any(r[0] == sym for r in ranked):
+                result.excluded.append({"symbol": sym, "reason": "alt_only_excluded"})
+        ranked = [(s, v) for s, v in ranked if s not in EXCLUDE_ALT_ONLY]
     top_symbols = ranked[:top_n]
 
     # Step 4: bookTicker → spread filter

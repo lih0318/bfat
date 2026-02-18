@@ -61,6 +61,7 @@ class EngineConfigUpdate(BaseModel):
     rsi_scale_overbought: float | None = None
     rsi_scale_oversold: float | None = None
     funding_scale_enabled: bool | None = None
+    universe_mode: str | None = None
     universe_top_n: int | None = None
     listing_age_days: int | None = None
     max_spread_pct: float | None = None
