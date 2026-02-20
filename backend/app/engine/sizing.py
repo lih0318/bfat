@@ -296,7 +296,7 @@ def compute_target_positions(
         if single_position_full_equity and len(normalised) == 1:
             # Single position: use full gross_notional (already set to 95% of max buying power)
             notional = gross_notional * abs(w)
-            sym_leverage = max(min_symbol_leverage, min(max_symbol_leverage, int(math.ceil(leverage_target))))
+            sym_leverage = max(min_symbol_leverage, min(max_symbol_leverage, int(round(leverage_target))))
         elif atr_val > 0 and risk_per_trade_pct > 0:
             # Path A: ATR-based risk sizing
             stop_dist = atr_val * stop_k
@@ -309,14 +309,14 @@ def compute_target_positions(
                 # Needed leverage = notional / (equity * weight_share_of_margin)
                 margin_share = equity * abs(w) * 0.90  # 10% reserve buffer
                 needed_lev = risk_notional / max(margin_share, 1.0) if margin_share > 0 else 1
-                sym_leverage = max(min_symbol_leverage, min(max_symbol_leverage, int(math.ceil(needed_lev))))
+                sym_leverage = max(min_symbol_leverage, min(max_symbol_leverage, int(round(needed_lev))))
                 notional = min(risk_notional, gross_notional * abs(w))
             else:
                 notional = gross_notional * abs(w)
         else:
             # Path B: vol-target fallback
             notional = gross_notional * abs(w)
-            sym_leverage = max(min_symbol_leverage, min(max_symbol_leverage, int(math.ceil(leverage_target))))
+            sym_leverage = max(min_symbol_leverage, min(max_symbol_leverage, int(round(leverage_target))))
 
         qty = notional / price
         qty = ExchangeInfoCache.round_quantity(sym, qty)

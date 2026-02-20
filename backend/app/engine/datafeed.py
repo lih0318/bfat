@@ -141,6 +141,27 @@ def compute_realized_vol(closes: np.ndarray, window: int = 60) -> float:
     return daily_vol * math.sqrt(365)  # annualize (crypto = 365 days)
 
 
+def fetch_swing_levels(
+    symbol: str,
+    signal_tf: str,
+    lookback_bars: int = 20,
+) -> tuple[float, float]:
+    """
+    Fetch recent klines and return (swing_low, swing_high) over the lookback window.
+    Used as structure-based SL/TP reference. Returns (0, 0) on error.
+    """
+    try:
+        raw = binance_client.klines(symbol=symbol, interval=signal_tf, limit=lookback_bars + 5)
+        if not raw or len(raw) < lookback_bars:
+            return 0.0, 0.0
+        lows = [float(k[3]) for k in raw[-lookback_bars:]]
+        highs = [float(k[2]) for k in raw[-lookback_bars:]]
+        return float(min(lows)), float(max(highs))
+    except Exception as exc:
+        logger.debug("fetch_swing_levels %s: %s", symbol, exc)
+        return 0.0, 0.0
+
+
 def fetch_atr_map(
     symbols: list[str],
     signal_tf: str,

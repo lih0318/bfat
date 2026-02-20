@@ -395,14 +395,16 @@ class ExecutionEngine:
             entry_price = 0.0
             actual_qty = 0.0
             actual_side = side
+            liquidation_price = 0.0
             for attempt in range(4):
                 positions = binance_client.position_information(symbol=symbol)
                 for p in positions:
                     amt = float(p.get("positionAmt", 0))
                     if amt != 0:
-                        entry_price = float(p.get("entryPrice", 0))
+                        entry_price = float(p.get("entryPrice", 0) or p.get("entry_price", 0))
                         actual_qty = abs(amt)
                         actual_side = "BUY" if amt > 0 else "SELL"
+                        liquidation_price = float(p.get("liquidationPrice") or p.get("liquidation_price") or 0)
                         break
                 if entry_price > 0 and actual_qty > 0:
                     break
@@ -421,7 +423,7 @@ class ExecutionEngine:
             state.be_moved = False
 
             # Compute ATR for Chandelier stop
-            from app.engine.datafeed import fetch_atr_map
+            from app.engine.datafeed import fetch_atr_map, fetch_swing_levels
             atr_map = fetch_atr_map([symbol], config.signal_tf, config.stop_atr_window)
             atr = atr_map.get(symbol, entry_price * 0.02)
 
@@ -430,7 +432,7 @@ class ExecutionEngine:
             state.initial_r = sl_dist
             stop_side = "SELL" if actual_side == "BUY" else "BUY"
 
-            # Calculate prices
+            # Base SL/TP from ATR multiples
             if actual_side == "BUY":
                 sl_price = entry_price - sl_dist
                 tp1_price = entry_price + sl_dist * config.tp1_r_multiple
@@ -439,6 +441,38 @@ class ExecutionEngine:
                 sl_price = entry_price + sl_dist
                 tp1_price = entry_price - sl_dist * config.tp1_r_multiple
                 tp2_price = entry_price - sl_dist * config.tp2_r_multiple
+
+            # Structure-based SL: tighten with recent swing low (long) / swing high (short) when valid
+            swing_low, swing_high = fetch_swing_levels(symbol, config.signal_tf, lookback_bars=20)
+            buf_pct = entry_price * 0.002
+            if actual_side == "BUY" and swing_low > 0 and entry_price > swing_low > sl_price:
+                sl_price = max(sl_price, swing_low - buf_pct)
+            elif actual_side == "SELL" and swing_high > 0 and entry_price < swing_high < sl_price:
+                sl_price = min(sl_price, swing_high + buf_pct)
+
+            # Clamp SL so it is always between entry and liquidation (never past liquidation)
+            liq_buffer = max(entry_price * 0.003, atr * 0.2)
+            tick = (ExchangeInfoCache.get_symbol_filters(symbol) or {}).get("tick_size", 0.01) or 0.01
+            min_dist_from_entry = max(entry_price * 0.001, float(tick))
+            if liquidation_price > 0:
+                if actual_side == "BUY":
+                    # Long: liquidation < SL < entry
+                    sl_price = max(sl_price, liquidation_price + liq_buffer)
+                    sl_price = min(sl_price, entry_price - min_dist_from_entry)
+                    if sl_price >= entry_price:
+                        sl_price = entry_price - min_dist_from_entry
+                else:
+                    # Short: entry < SL < liquidation
+                    sl_price = min(sl_price, liquidation_price - liq_buffer)
+                    sl_price = max(sl_price, entry_price + min_dist_from_entry)
+                    if sl_price <= entry_price:
+                        sl_price = entry_price + min_dist_from_entry
+            else:
+                # No liq from API: keep SL on correct side of entry only
+                if actual_side == "BUY" and sl_price >= entry_price:
+                    sl_price = entry_price - min_dist_from_entry
+                elif actual_side == "SELL" and sl_price <= entry_price:
+                    sl_price = entry_price + min_dist_from_entry
 
             sl_price = ExchangeInfoCache.round_price(symbol, sl_price)
             tp1_price = ExchangeInfoCache.round_price(symbol, tp1_price)
