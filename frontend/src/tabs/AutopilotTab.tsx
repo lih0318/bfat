@@ -113,6 +113,7 @@ interface EngineStatus {
   peak_equity: number
   gross_exposure: number
   universe_size: number
+  engine?: 'modular' | 'legacy'
 }
 
 interface ActivityItem {
@@ -136,6 +137,7 @@ export function AutopilotTab() {
 
   // New engine config form
   const [form, setForm] = useState({
+    use_modular_engine: false,
     profile: 'balanced' as string,
     signal_tf: '1d' as string,
     deadzone_threshold: 0.10,
@@ -172,6 +174,10 @@ export function AutopilotTab() {
     breakeven_after_tp1: true,
     breakeven_offset_bps: 10,
     symbol: 'BTCUSDT',
+    atr_stop_mult: 1.5,
+    btc_pullback_tolerance_pct: 0.005,
+    alt_rsi_long_max: 30,
+    alt_rsi_short_min: 70,
   })
 
   const load = async () => {
@@ -233,6 +239,7 @@ export function AutopilotTab() {
 
   const applyConfigToForm = (config: Record<string, unknown>, prev: typeof form) => ({
     ...prev,
+    use_modular_engine: Boolean(config.use_modular_engine ?? prev.use_modular_engine),
     profile: String(config.profile ?? prev.profile),
     signal_tf: String(config.signal_tf ?? prev.signal_tf),
     deadzone_threshold: Number(config.deadzone_threshold ?? prev.deadzone_threshold),
@@ -269,6 +276,10 @@ export function AutopilotTab() {
     breakeven_after_tp1: Boolean(config.breakeven_after_tp1 ?? prev.breakeven_after_tp1),
     breakeven_offset_bps: Number(config.breakeven_offset_bps ?? prev.breakeven_offset_bps),
     symbol: String(config.symbol ?? prev.symbol),
+    atr_stop_mult: Number(config.atr_stop_mult ?? prev.atr_stop_mult),
+    btc_pullback_tolerance_pct: Number(config.btc_pullback_tolerance_pct ?? prev.btc_pullback_tolerance_pct),
+    alt_rsi_long_max: Number(config.alt_rsi_long_max ?? prev.alt_rsi_long_max),
+    alt_rsi_short_min: Number(config.alt_rsi_short_min ?? prev.alt_rsi_short_min),
   })
 
   const handleSaveConfig = async () => {
@@ -300,7 +311,11 @@ export function AutopilotTab() {
       {/* ── Hero: Status + Regime ───────────────────────────── */}
       <div className="richman-hero">
         <div className="richman-status-card">
-          <h3>TSMOM Engine</h3>
+          <h3>
+            {(status as EngineStatus & { engine?: string })?.engine === 'modular' || (!status?.running && form.use_modular_engine)
+              ? 'New Engine (Modular)'
+              : 'TSMOM Engine (Legacy)'}
+          </h3>
           <p className={status?.running ? 'status-running' : 'status-stopped'}>
             {status?.running ? 'Running' : 'Stopped'}
             {status?.reason ? ` — ${status.reason}` : ''}
@@ -390,6 +405,16 @@ export function AutopilotTab() {
             {/* Profile */}
             <section className="config-section">
               <h4>Profile</h4>
+              <label className="config-checkbox">
+                <input
+                  type="checkbox"
+                  checked={form.use_modular_engine}
+                  onChange={(e) => setField('use_modular_engine', e.target.checked)}
+                />
+                <span>
+                  Use New Engine (Modular) <Tip text="BTC 트렌드 추종 + ALT 평균회귀 전략. 체크 해제 시 기존 TSMOM 엔진 사용." />
+                </span>
+              </label>
               <div className="config-row config-row--three">
                 <label>
                   <span>Profile <Tip text="프리셋 선택. Conservative=낮은 변동성/레버리지, Balanced=중간, Aggressive=높은 변동성/빠른 실행. Custom은 수동 설정." /></span>
@@ -536,6 +561,38 @@ export function AutopilotTab() {
                 <span>TP1 체결 후 SL → 본절(BE) 이동 <Tip text="TP1이 체결되면 SL을 진입가(+offset)로 자동 상향. 손실 없는 포지션으로 전환." /></span>
               </label>
             </section>
+
+            {/* New Engine (Modular) Settings - only when use_modular_engine */}
+            {form.use_modular_engine && (
+              <section className="config-section">
+                <h4>New Engine (Modular) Settings</h4>
+                <div className="config-row config-row--three">
+                  <label>
+                    <span>ATR Stop Multiplier <Tip text="Modular: 손절 거리 = ATR × 이 값. 1.2~2.2. 기본 1.5." /></span>
+                    <input type="number" min={1.2} max={2.2} step={0.1} value={form.atr_stop_mult}
+                      onChange={(e) => setField('atr_stop_mult', Number(e.target.value) || 1.5)} />
+                  </label>
+                  <label>
+                    <span>BTC Pullback Tolerance (%) <Tip text="BTC 푸백: 가격이 EMA50 대비 이 비율 이내면 푸백으로 인정. 작을수록 엄격. 기본 0.5%." /></span>
+                    <input type="number" min={0.2} max={1.5} step={0.1}
+                      value={Math.round(form.btc_pullback_tolerance_pct * 1000) / 10}
+                      onChange={(e) => setField('btc_pullback_tolerance_pct', (Number(e.target.value) || 0.5) / 100)} />
+                  </label>
+                  <label>
+                    <span>ALT RSI Long Max <Tip text="ALT 롱: RSI가 이 값 미만일 때만 진입 (과매도). 기본 30. 낮을수록 엄격." /></span>
+                    <input type="number" min={20} max={40} step={1} value={form.alt_rsi_long_max}
+                      onChange={(e) => setField('alt_rsi_long_max', Number(e.target.value) || 30)} />
+                  </label>
+                </div>
+                <div className="config-row">
+                  <label>
+                    <span>ALT RSI Short Min <Tip text="ALT 숏: RSI가 이 값 초과일 때만 진입 (과매수). 기본 70. 높을수록 엄격." /></span>
+                    <input type="number" min={60} max={80} step={1} value={form.alt_rsi_short_min}
+                      onChange={(e) => setField('alt_rsi_short_min', Number(e.target.value) || 70)} />
+                  </label>
+                </div>
+              </section>
+            )}
 
             {/* Margin / Risk Management */}
             <section className="config-section">

@@ -15,6 +15,7 @@ Endpoints:
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
@@ -23,12 +24,19 @@ from pydantic import BaseModel
 from app.engine.accounting import ledger
 from app.engine.config_model import EngineConfig, load_engine_config, save_engine_config
 from app.engine.datafeed import fetch_atr_map, fetch_vol_map
+from app.engine.modular.config_model import (
+    ModularConfig,
+    load_modular_config,
+    save_modular_config,
+)
 from app.engine.profiles import PROFILES, apply_profile
+from app.engine.modular.runner import ModularRunner
 from app.engine.runner import engine
 from app.engine.signals import generate_reasoning
 from app.services.binance_client import binance_client
 
 router = APIRouter()
+modular_engine = ModularRunner()
 
 
 # ── Config ───────────────────────────────────────────────────────
@@ -37,6 +45,7 @@ router = APIRouter()
 class EngineConfigUpdate(BaseModel):
     """Partial update model — all fields optional."""
     profile: str | None = None
+    use_modular_engine: bool | None = None
     signal_tf: str | None = None
     horizons: list[int] | None = None
     deadzone_threshold: float | None = None
@@ -83,6 +92,39 @@ class EngineConfigUpdate(BaseModel):
     breakeven_after_tp1: bool | None = None
     breakeven_offset_bps: int | None = None
     symbol: str | None = None
+    atr_stop_mult: float | None = None
+    btc_pullback_tolerance_pct: float | None = None
+    alt_rsi_long_max: float | None = None
+    alt_rsi_short_min: float | None = None
+
+
+def _engine_to_modular_config(eng: EngineConfig) -> ModularConfig:
+    """Convert EngineConfig to ModularConfig for sync to modular_engine.json."""
+    base = load_modular_config()
+    d = base.model_dump()
+    overlap = [
+        "signal_tf", "horizons", "deadzone_threshold", "vol_window",
+        "target_portfolio_vol", "effective_leverage_target", "stop_atr_window", "stop_k",
+        "chandelier_atr_mult", "tp1_r_multiple", "tp2_r_multiple",
+        "tp1_close_pct", "tp2_close_pct", "breakeven_after_tp1", "breakeven_offset_bps",
+        "execution_tick_sec", "execution_threshold_pct", "entry_order_mode", "ioc_epsilon",
+        "top_k_enabled", "top_k", "replace_threshold", "min_weight_floor", "max_weight_cap",
+        "rsi_period", "rsi_overbought", "rsi_oversold", "rsi_scale_overbought", "rsi_scale_oversold",
+        "funding_scale_enabled", "universe_mode", "universe_top_n", "listing_age_days",
+        "max_spread_pct", "margin_mode", "max_symbol_leverage", "min_symbol_leverage",
+        "max_concurrent_symbols", "reserve_margin_buffer_pct", "drawdown_kill_pct",
+        "symbol", "adaptive_leverage_enabled", "min_concentration_pct", "max_concentration_pct",
+    ]
+    for k in overlap:
+        if hasattr(eng, k):
+            d[k] = getattr(eng, k)
+    risk = getattr(eng, "risk_per_trade_pct", 0.005)
+    d["risk_per_trade_pct"] = max(0.003, min(0.008, risk))
+    d["atr_stop_mult"] = getattr(eng, "atr_stop_mult", 1.5)
+    d["btc_pullback_tolerance_pct"] = getattr(eng, "btc_pullback_tolerance_pct", 0.005)
+    d["alt_rsi_long_max"] = getattr(eng, "alt_rsi_long_max", 30.0)
+    d["alt_rsi_short_min"] = getattr(eng, "alt_rsi_short_min", 70.0)
+    return ModularConfig.model_validate(d)
 
 
 @router.get("/config")
@@ -114,7 +156,15 @@ def put_config(update: EngineConfigUpdate) -> dict[str, Any]:
 
     save_engine_config(new_cfg)
 
-    # If engine is running, update its config live
+    # If modular engine selected, sync to modular_engine.json
+    if new_cfg.use_modular_engine:
+        try:
+            modular_cfg = _engine_to_modular_config(new_cfg)
+            save_modular_config(modular_cfg)
+        except Exception as exc:
+            logging.getLogger(__name__).warning("Sync to modular config failed: %s", exc)
+
+    # If legacy engine is running, update its config live
     if engine.running:
         engine.config = new_cfg
 
@@ -126,15 +176,26 @@ def put_config(update: EngineConfigUpdate) -> dict[str, Any]:
 
 @router.post("/start")
 def start_engine() -> dict[str, Any]:
-    result = engine.start()
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result.get("message", "Failed"))
-    return result
+    cfg = load_engine_config()
+    if cfg.use_modular_engine:
+        if engine.running:
+            engine.stop()
+        modular_engine.start()
+        return {"ok": True, "engine": "modular"}
+    else:
+        if modular_engine.running:
+            modular_engine.stop()
+        result = engine.start()
+        if not result.get("ok"):
+            raise HTTPException(status_code=400, detail=result.get("message", "Failed"))
+        return result
 
 
 @router.post("/stop")
 def stop_engine() -> dict[str, Any]:
-    return engine.stop()
+    engine.stop()
+    modular_engine.stop()
+    return {"ok": True}
 
 
 # ── Status ───────────────────────────────────────────────────────
@@ -142,7 +203,13 @@ def stop_engine() -> dict[str, Any]:
 
 @router.get("/status")
 def status() -> dict[str, Any]:
-    return engine.get_status()
+    if modular_engine.running:
+        out = modular_engine.get_status()
+        out["engine"] = "modular"
+        return out
+    out = engine.get_status()
+    out["engine"] = "legacy"
+    return out
 
 
 # ── Activity ─────────────────────────────────────────────────────

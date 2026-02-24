@@ -433,6 +433,50 @@ class BinanceFuturesClient:
         """Close listenKey."""
         self._signed_request("DELETE", "/fapi/v1/listenKey", {})
 
+    def new_algo_order_trailing(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        callback_rate: float,
+        activate_price: Optional[float] = None,
+        reduce_only: bool = True,
+        client_algo_id: Optional[str] = None,
+        working_type: str = "CONTRACT_PRICE",
+        recv_window: int = DEFAULT_RECV_WINDOW,
+    ) -> dict[str, Any]:
+        """
+        Place TRAILING_STOP_MARKET via Algo Order API.
+        callback_rate: 0.1-10 (1 = 1% retracement).
+        activate_price: price at which trailing activates (required for FUTURES).
+        For SELL (close long): activate_price > current price.
+        For BUY (close short): activate_price < current price.
+        """
+        params: dict[str, Any] = {
+            "algoType": "CONDITIONAL",
+            "symbol": symbol,
+            "side": side,
+            "type": "TRAILING_STOP_MARKET",
+            "quantity": self._format_decimal(quantity),
+            "callbackRate": self._format_decimal(callback_rate),
+            "reduceOnly": "true" if reduce_only else "false",
+            "workingType": working_type,
+            "positionSide": "BOTH",
+            "recvWindow": recv_window,
+            "timestamp": self._timestamp_ms(),
+        }
+        if activate_price is not None:
+            params["activatePrice"] = self._format_decimal(activate_price)
+        if client_algo_id is not None:
+            params["clientAlgoId"] = client_algo_id
+        result = self._signed_request("POST", "/fapi/v1/algoOrder", params)
+        if isinstance(result, dict) and result.get("algoId"):
+            return result
+        if isinstance(result, dict) and result.get("code") and int(result["code"]) < 0:
+            raise RuntimeError(f"Trailing stop rejected: code={result.get('code')} msg={result.get('msg')}")
+        logger.warning("Trailing stop unexpected response for %s: %s", symbol, result)
+        return result
+
     def cancel_order(self, symbol: str, order_id: Optional[int] = None,
                      client_order_id: Optional[str] = None,
                      recv_window: int = DEFAULT_RECV_WINDOW) -> dict[str, Any]:

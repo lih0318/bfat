@@ -24,6 +24,10 @@ class EngineConfig(BaseModel):
     profile: Literal["conservative", "balanced", "aggressive", "custom"] = Field(
         "balanced", description="Preset profile or custom"
     )
+    use_modular_engine: bool = Field(
+        False,
+        description="If True, use modular engine (signal->sizing->execution pipeline)",
+    )
 
     # ── Signal ───────────────────────────────────────────────────
     signal_tf: Literal["1d", "4h"] = Field("1d", description="Signal timeframe")
@@ -171,6 +175,23 @@ class EngineConfig(BaseModel):
     drawdown_kill_pct: float = Field(
         0.15, ge=0.01, le=1.0,
         description="Kill switch: stop engine if drawdown exceeds this fraction",
+    )
+    # ── Modular engine only (ignored by legacy) ──────────────────────
+    atr_stop_mult: float = Field(
+        1.5, ge=1.2, le=2.2,
+        description="ATR multiplier for stop distance (Modular: 1.5×ATR)",
+    )
+    btc_pullback_tolerance_pct: float = Field(
+        0.005, ge=0.002, le=0.015,
+        description="BTC pullback: price within this % of EMA50 to count as pullback",
+    )
+    alt_rsi_long_max: float = Field(
+        30.0, ge=20.0, le=40.0,
+        description="ALT long: RSI must be below this (oversold)",
+    )
+    alt_rsi_short_min: float = Field(
+        70.0, ge=60.0, le=80.0,
+        description="ALT short: RSI must be above this (overbought)",
     )
     adaptive_leverage_enabled: bool = Field(
         True,

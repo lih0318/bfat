@@ -12,6 +12,7 @@ from typing import Any
 # 안정 우선. 레버리지 3배, 넓은 손절, 느린 실행, 분산 적음.
 # 바이낸스 계좌 레버리지: 10배 (마진 효율), 실제 노출: 자본의 ~3배.
 CONSERVATIVE: dict[str, Any] = {
+    "use_modular_engine": False,
     "signal_tf": "1d",
     "horizons": [30, 90, 365],
     "deadzone_threshold": 0.15,
@@ -57,12 +58,17 @@ CONSERVATIVE: dict[str, Any] = {
     "tp2_close_pct": 1.0,
     "breakeven_after_tp1": True,
     "breakeven_offset_bps": 15,
+    "atr_stop_mult": 1.5,
+    "btc_pullback_tolerance_pct": 0.005,
+    "alt_rsi_long_max": 30.0,
+    "alt_rsi_short_min": 70.0,
 }
 
 # ── Balanced ─────────────────────────────────────────────────────
 # 수익-리스크 균형. 레버리지 5배, 표준 손절, 중간 속도.
 # 바이낸스 계좌 레버리지: 10배, 실제 노출: 자본의 ~5배.
 BALANCED: dict[str, Any] = {
+    "use_modular_engine": False,
     "signal_tf": "1d",
     "horizons": [30, 90, 365],
     "deadzone_threshold": 0.10,
@@ -108,12 +114,17 @@ BALANCED: dict[str, Any] = {
     "tp2_close_pct": 1.0,
     "breakeven_after_tp1": True,
     "breakeven_offset_bps": 10,
+    "atr_stop_mult": 1.5,
+    "btc_pullback_tolerance_pct": 0.005,
+    "alt_rsi_long_max": 30.0,
+    "alt_rsi_short_min": 70.0,
 }
 
 # ── Aggressive ───────────────────────────────────────────────────
 # 수익 극대화. 레버리지 10배, 타이트 손절, 빠른 실행, 넓은 분산.
 # 바이낸스 계좌 레버리지: 20배, 실제 노출: 자본의 ~10배.
 AGGRESSIVE: dict[str, Any] = {
+    "use_modular_engine": False,
     "signal_tf": "4h",
     "horizons": [30, 90, 365],
     "deadzone_threshold": 0.05,
@@ -159,6 +170,10 @@ AGGRESSIVE: dict[str, Any] = {
     "tp2_close_pct": 1.0,
     "breakeven_after_tp1": True,
     "breakeven_offset_bps": 5,
+    "atr_stop_mult": 1.5,
+    "btc_pullback_tolerance_pct": 0.005,
+    "alt_rsi_long_max": 30.0,
+    "alt_rsi_short_min": 70.0,
 }
 
 PROFILES: dict[str, dict[str, Any]] = {
