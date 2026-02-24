@@ -41,7 +41,16 @@ async function fetchApi<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (!res.ok) {
     const text = await res.text()
-    throw new Error(text || `HTTP ${res.status}`)
+    let message = text || `HTTP ${res.status}`
+    try {
+      const json = JSON.parse(text) as { detail?: string | string[] }
+      if (json.detail) {
+        message = Array.isArray(json.detail) ? json.detail.join(', ') : json.detail
+      }
+    } catch {
+      // Keep raw text if not JSON
+    }
+    throw new Error(message)
   }
   return res.json() as Promise<T>
 }

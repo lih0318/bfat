@@ -176,12 +176,26 @@ def put_config(update: EngineConfigUpdate) -> dict[str, Any]:
 
 @router.post("/start")
 def start_engine() -> dict[str, Any]:
-    cfg = load_engine_config()
+    try:
+        cfg = load_engine_config()
+    except Exception as exc:
+        logging.getLogger(__name__).exception("load_engine_config failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Config load failed: {exc}")
+
     if cfg.use_modular_engine:
-        if engine.running:
-            engine.stop()
-        modular_engine.start()
-        return {"ok": True, "engine": "modular"}
+        if not binance_client.is_configured():
+            raise HTTPException(
+                status_code=400,
+                detail="Binance API not configured. Set BINANCE_API_KEY and BINANCE_API_SECRET.",
+            )
+        try:
+            if engine.running:
+                engine.stop()
+            modular_engine.start()
+            return {"ok": True, "engine": "modular", "message": "Modular engine started"}
+        except Exception as exc:
+            logging.getLogger(__name__).exception("modular_engine.start failed: %s", exc)
+            raise HTTPException(status_code=500, detail=f"Modular engine start failed: {exc}")
     else:
         if modular_engine.running:
             modular_engine.stop()

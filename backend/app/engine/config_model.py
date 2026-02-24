@@ -234,7 +234,7 @@ def _engine_config_path() -> Path:
 
 
 def load_engine_config() -> EngineConfig:
-    """Load from disk or return defaults."""
+    """Load from disk, bootstrap from autopilot.json if needed, or return defaults."""
     path = _engine_config_path()
     if path.exists():
         try:
@@ -243,7 +243,20 @@ def load_engine_config() -> EngineConfig:
             return EngineConfig.model_validate(data)
         except Exception as exc:
             logger.warning("Failed to load engine config: %s", exc)
-    return EngineConfig()
+    # Bootstrap: use defaults, optionally migrate symbol from autopilot, create file for persistence
+    cfg = EngineConfig()
+    try:
+        ap_path = settings.config_dir / "autopilot.json"
+        if ap_path.exists():
+            with open(ap_path, encoding="utf-8") as f:
+                ap_data = json.load(f)
+            if isinstance(ap_data.get("symbol"), str):
+                cfg.symbol = ap_data["symbol"].strip().upper() or cfg.symbol
+    except Exception as exc:
+        logger.debug("Autopilot bootstrap skip: %s", exc)
+    # Persist so subsequent requests and Start use same config
+    save_engine_config(cfg)
+    return cfg
 
 
 def save_engine_config(cfg: EngineConfig) -> None:
