@@ -172,6 +172,18 @@ class EngineConfig(BaseModel):
         0.15, ge=0.01, le=1.0,
         description="Kill switch: stop engine if drawdown exceeds this fraction",
     )
+    adaptive_leverage_enabled: bool = Field(
+        True,
+        description="When alt_only: scale concentration and leverage by conviction and volatility",
+    )
+    min_concentration_pct: float = Field(
+        0.50, ge=0.2, le=0.95,
+        description="Min fraction of buying power for single position (adaptive mode)",
+    )
+    max_concentration_pct: float = Field(
+        0.95, ge=0.5, le=1.0,
+        description="Max fraction of buying power for single position (adaptive mode)",
+    )
 
     # ── Alerts (optional) ────────────────────────────────────────
     alerts_telegram_bot_token: Optional[str] = Field(None)

@@ -419,6 +419,10 @@ class EngineRunner:
                 stop_k=cfg.stop_k,
                 atr_map=_atr_map,
                 single_position_full_equity=(cfg.universe_mode == "alt_only"),
+                adaptive_leverage_enabled=cfg.adaptive_leverage_enabled,
+                min_concentration_pct=cfg.min_concentration_pct,
+                max_concentration_pct=cfg.max_concentration_pct,
+                deadzone_threshold=cfg.deadzone_threshold,
             )
 
             # 5. Risk guard

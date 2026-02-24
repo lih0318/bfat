@@ -72,6 +72,9 @@ class EngineConfigUpdate(BaseModel):
     min_symbol_leverage: int | None = None
     max_concurrent_symbols: int | None = None
     reserve_margin_buffer_pct: float | None = None
+    adaptive_leverage_enabled: bool | None = None
+    min_concentration_pct: float | None = None
+    max_concentration_pct: float | None = None
     chandelier_atr_mult: float | None = None
     tp1_r_multiple: float | None = None
     tp2_r_multiple: float | None = None

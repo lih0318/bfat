@@ -169,6 +169,11 @@ def compute_target_positions(
     stop_k: float = 2.0,
     atr_map: dict[str, float] | None = None,
     single_position_full_equity: bool = False,
+    # ---- Adaptive leverage (alt_only) ----
+    adaptive_leverage_enabled: bool = True,
+    min_concentration_pct: float = 0.50,
+    max_concentration_pct: float = 0.95,
+    deadzone_threshold: float = 0.10,
 ) -> SizingResult:
     """
     Compute target positions for all symbols in the signal universe.
@@ -257,10 +262,28 @@ def compute_target_positions(
         scale = 1.0 / abs_sum2
         normalised = {s: w * scale for s, w in normalised.items()}
 
-    # Step 4: gross_notional from vol targeting (or full equity when single-position mode)
+    # Step 4: gross_notional from vol targeting (or adaptive concentration when single-position mode)
     max_notional = equity * leverage_target
+    conviction_scale = 1.0
+    vol_scale = 1.0
     if single_position_full_equity and len(normalised) == 1:
-        gross_notional = max_notional * 0.95  # 95% of buying power for the single position
+        single_sym = next(iter(normalised))
+        single_snap = snapshots.get(single_sym)
+        single_vol = vol_map.get(single_sym, target_vol)
+        if adaptive_leverage_enabled and single_snap:
+            ref_score = max(deadzone_threshold * 3.0, 0.01)
+            conviction_scale = min(1.0, max(0.5, abs(single_snap.final_score) / ref_score))
+            vol_scale = min(1.0, target_vol / single_vol) if single_vol > 0 else 1.0
+            concentration_pct = min_concentration_pct + (max_concentration_pct - min_concentration_pct) * conviction_scale * vol_scale
+            concentration_pct = max(min_concentration_pct, min(max_concentration_pct, concentration_pct))
+            gross_notional = max_notional * concentration_pct
+            logger.info(
+                "sizing: adaptive single position concentration=%.2f%% conviction_scale=%.2f vol_scale=%.2f (score=%.4f vol=%.4f)",
+                concentration_pct * 100, conviction_scale, vol_scale,
+                single_snap.final_score, single_vol,
+            )
+        else:
+            gross_notional = max_notional * 0.95
     else:
         avg_vol = 0.0
         for sym, w in normalised.items():
@@ -294,9 +317,14 @@ def compute_target_positions(
         sym_leverage = min_symbol_leverage  # will be computed
 
         if single_position_full_equity and len(normalised) == 1:
-            # Single position: use full gross_notional (already set to 95% of max buying power)
+            # Single position: gross_notional already set by adaptive concentration or 95%
             notional = gross_notional * abs(w)
-            sym_leverage = max(min_symbol_leverage, min(max_symbol_leverage, int(round(leverage_target))))
+            base_lev = leverage_target
+            if adaptive_leverage_enabled:
+                scaled_lev = base_lev * conviction_scale * vol_scale
+                sym_leverage = max(min_symbol_leverage, min(max_symbol_leverage, int(round(scaled_lev))))
+            else:
+                sym_leverage = max(min_symbol_leverage, min(max_symbol_leverage, int(round(leverage_target))))
         elif atr_val > 0 and risk_per_trade_pct > 0:
             # Path A: ATR-based risk sizing
             stop_dist = atr_val * stop_k
