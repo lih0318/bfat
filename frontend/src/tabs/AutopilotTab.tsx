@@ -322,10 +322,10 @@ export function AutopilotTab() {
           </p>
           {status && (
             <div className="engine-stats">
-              <span>Profile: <strong>{status.profile}</strong></span>
-              <span>Equity: <strong>${status.equity.toLocaleString()}</strong></span>
-              <span>Exposure: <strong>${status.gross_exposure.toLocaleString()}</strong></span>
-              <span>Universe: <strong>{status.universe_size}</strong></span>
+              <span>Profile: <strong>{status.profile ?? '—'}</strong></span>
+              <span>Equity: <strong>${(status.equity ?? 0).toLocaleString()}</strong></span>
+              <span>Exposure: <strong>${(status.gross_exposure ?? 0).toLocaleString()}</strong></span>
+              <span>Universe: <strong>{status.universe_size ?? 0}</strong></span>
               <span>Active: <strong>{status.active_symbols?.length ?? 0}</strong></span>
             </div>
           )}

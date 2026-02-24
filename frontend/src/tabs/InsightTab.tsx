@@ -49,15 +49,15 @@ export function InsightTab() {
     )
   }
 
-  const pulse = data.engine_pulse
-  const market = data.market_summary
-  const risk = data.risk_status
-  const universe = data.universe_scan
-  const signals = data.signals
-  const portfolio = data.portfolio
+  const pulse = data.engine_pulse ?? {}
+  const market = data.market_summary ?? {}
+  const risk = data.risk_status ?? {}
+  const universe = data.universe_scan ?? { selected_count: 0, excluded: [], total_scanned: 0 }
+  const signals = data.signals ?? []
+  const portfolio = data.portfolio ?? []
 
   // Filter signals
-  const filteredSignals = signals.filter((s) => {
+  const filteredSignals = (signals as SignalItem[]).filter((s) => {
     if (signalFilter === 'all') return true
     if (signalFilter === 'long') return s.final_score > 0
     if (signalFilter === 'short') return s.final_score < 0
@@ -76,12 +76,14 @@ export function InsightTab() {
     return `${h}시간 ${m}분`
   }
 
-  // Drawdown gauge percentage
-  const drawdownPct = (risk.drawdown_pct / risk.drawdown_threshold) * 100
+  // Drawdown gauge percentage (guard div by zero)
+  const drawdownThreshold = risk.drawdown_threshold && risk.drawdown_threshold > 0 ? risk.drawdown_threshold : 0.15
+  const drawdownPct = (risk.drawdown_pct / drawdownThreshold) * 100
   const drawdownColor = drawdownPct >= 90 ? '#ef4444' : drawdownPct >= 50 ? '#f59e0b' : '#22c55e'
 
-  // Leverage gauge percentage
-  const leveragePct = (risk.gross_leverage / risk.max_leverage) * 100
+  // Leverage gauge percentage (guard div by zero)
+  const maxLev = risk.max_leverage && risk.max_leverage > 0 ? risk.max_leverage : 20
+  const leveragePct = (risk.gross_leverage / maxLev) * 100
   const leverageColor = leveragePct >= 90 ? '#ef4444' : leveragePct >= 70 ? '#f59e0b' : '#22c55e'
 
   return (
@@ -127,9 +129,17 @@ export function InsightTab() {
           </div>
           <div className="market-sentiment">
             <div className="sentiment-bar">
-              <div className="sentiment-bull" style={{ width: `${(market.bullish_count / (market.bullish_count + market.bearish_count + market.neutral_count)) * 100}%` }} />
-              <div className="sentiment-neutral" style={{ width: `${(market.neutral_count / (market.bullish_count + market.bearish_count + market.neutral_count)) * 100}%` }} />
-              <div className="sentiment-bear" style={{ width: `${(market.bearish_count / (market.bullish_count + market.bearish_count + market.neutral_count)) * 100}%` }} />
+              {(() => {
+                const total = (market.bullish_count ?? 0) + (market.bearish_count ?? 0) + (market.neutral_count ?? 0)
+                const pct = total > 0 ? (n: number) => ((n ?? 0) / total) * 100 : () => 33.33
+                return (
+                  <>
+                    <div className="sentiment-bull" style={{ width: `${pct(market.bullish_count)}%` }} />
+                    <div className="sentiment-neutral" style={{ width: `${pct(market.neutral_count)}%` }} />
+                    <div className="sentiment-bear" style={{ width: `${pct(market.bearish_count)}%` }} />
+                  </>
+                )
+              })()}
             </div>
             <div className="sentiment-labels">
               <span className="sentiment-label-bull">Bull: {market.bullish_count}</span>
@@ -158,7 +168,7 @@ export function InsightTab() {
           <div className="risk-item">
             <div className="risk-label">
               <span>Leverage</span>
-              <span className="risk-value">{risk.gross_leverage.toFixed(2)}x / {risk.max_leverage.toFixed(1)}x</span>
+              <span className="risk-value">{(risk.gross_leverage ?? 0).toFixed(2)}x / {(risk.max_leverage ?? maxLev).toFixed(1)}x</span>
             </div>
             <div className="risk-gauge">
               <div className="risk-gauge-fill" style={{ width: `${Math.min(100, leveragePct)}%`, backgroundColor: leverageColor }} />
@@ -242,8 +252,8 @@ export function InsightTab() {
                     <td className={scoreClass}>{s.final_score > 0 ? '+' : ''}{s.final_score.toFixed(4)}</td>
                     <td className="signal-horizons">{horizonStr}</td>
                     <td>{s.rsi.toFixed(1)}</td>
-                    <td>{(s.funding_rate * 100).toFixed(4)}%</td>
-                    <td>{(s.realized_vol * 100).toFixed(1)}%</td>
+                    <td>{((s.funding_rate ?? 0) * 100).toFixed(4)}%</td>
+                    <td>{((s.realized_vol ?? 0) * 100).toFixed(1)}%</td>
                     <td className="signal-reasoning">{s.reasoning}</td>
                   </tr>
                 )

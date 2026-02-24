@@ -333,19 +333,61 @@ def signals() -> list[dict[str, Any]]:
 # ── NEW: Insight ─────────────────────────────────────────────────
 
 
+def _empty_insight() -> dict[str, Any]:
+    """Safe fallback when modular engine runs (Insight tab uses legacy data structure)."""
+    return {
+        "engine_pulse": {
+            "last_signal_tick": 0,
+            "last_exec_tick": 0,
+            "signal_count": 0,
+            "exec_count": 0,
+            "signal_interval_sec": 0,
+            "exec_interval_sec": 0,
+            "time_since_signal_sec": 0,
+            "time_since_exec_sec": 0,
+            "next_signal_sec": 0,
+            "next_exec_sec": 0,
+            "signal_tf": "1d",
+        },
+        "market_summary": {
+            "bullish_count": 0,
+            "bearish_count": 0,
+            "neutral_count": 0,
+            "avg_trend_score": 0.0,
+            "temperature": "중립",
+        },
+        "risk_status": {
+            "equity": 0.0,
+            "peak_equity": 0.0,
+            "drawdown_pct": 0.0,
+            "drawdown_threshold": 0.15,
+            "gross_leverage": 0.0,
+            "max_leverage": 20.0,
+            "warnings": [],
+            "kill_active": False,
+            "margin_mode": "ISOLATED",
+            "available_balance": 0.0,
+            "reserve_buffer_pct": 0.10,
+            "max_symbol_leverage": 20,
+            "risk_per_trade_pct": 0.005,
+            "max_concurrent_symbols": 10,
+        },
+        "universe_scan": {"selected_count": 0, "excluded": [], "total_scanned": 0},
+        "signals": [],
+        "portfolio": [],
+    }
+
+
 @router.get("/insight")
 def insight() -> dict[str, Any]:
     """Comprehensive engine insight data for Insight tab."""
+    if modular_engine.running:
+        return _empty_insight()
     insight_data = engine.get_insight()
-    
-    # Add signals with reasoning for decision log
-    signals_data = signals()  # reuse the signals endpoint
+    signals_data = signals()
     insight_data["signals"] = signals_data
-    
-    # Add portfolio for decision context
     portfolio_data = engine.get_portfolio()
     insight_data["portfolio"] = portfolio_data
-    
     return insight_data
 
 

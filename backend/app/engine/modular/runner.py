@@ -41,15 +41,26 @@ class ModularRunner:
         self._config = cfg
 
     def get_status(self) -> dict[str, Any]:
-        out = {
+        """Return status in format compatible with legacy EngineRunner for frontend."""
+        equity = self._last_status.get("equity", 0.0)
+        peak = self._last_status.get("peak_equity", 0.0) or self._peak_equity
+        profile = "balanced"
+        try:
+            from app.engine.config_model import load_engine_config
+            profile = load_engine_config().profile or "balanced"
+        except Exception:
+            pass
+        return {
             "running": self._running,
             "reason": self._status_reason,
-            "symbols_count": self._last_status.get("symbols_count", 0),
-            "targets_count": self._last_status.get("decisions_allowed", 0),
-            "equity": self._last_status.get("equity", 0.0),
-            "peak_equity": self._last_status.get("peak_equity", 0.0),
+            "profile": profile,
+            "symbol": self._config.symbol,
+            "active_symbols": self._last_status.get("active_symbols", []),
+            "equity": round(equity, 2),
+            "peak_equity": round(peak, 2),
+            "gross_exposure": round(self._last_status.get("gross_exposure", 0.0), 2),
+            "universe_size": self._last_status.get("universe_size", self._last_status.get("symbols_count", 0)),
         }
-        return out
 
     def _loop(self) -> None:
         interval = self._config.execution_tick_sec
@@ -65,6 +76,9 @@ class ModularRunner:
                 "equity": status.get("equity", 0.0),
                 "peak_equity": status.get("peak_equity", self._peak_equity),
                 "success": status.get("success"),
+                "gross_exposure": status.get("gross_exposure", 0.0),
+                "active_symbols": status.get("active_symbols", []),
+                "universe_size": status.get("universe_size", 0),
             }
             if self._stop_event.wait(timeout=interval):
                 break
