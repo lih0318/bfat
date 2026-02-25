@@ -19,7 +19,7 @@ from app.engine.modular.execution_engine import (
 from app.engine.modular.optimizer_engine import OptimizerState, run as run_optimizer
 from app.engine.modular.risk_engine import RiskContext, run as run_risk
 from app.engine.modular.signal_engine import run as run_signal
-from app.engine.modular.types import PerformanceLog, RiskResult, SignalResult
+from app.engine.modular.types import OrderPlan, PerformanceLog, RiskResult, SignalResult
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +28,9 @@ def tick(
     config: ModularConfig,
     optimizer_state: Optional[OptimizerState] = None,
     peak_equity: float = 0.0,
-) -> tuple[dict[str, Any], Optional[OptimizerState], float]:
+) -> tuple[dict[str, Any], Optional[OptimizerState], float, Optional[SignalResult], Optional[Any]]:
     """
-    Single pipeline tick. Returns (status_dict, new_optimizer_state, new_peak_equity).
+    Single pipeline tick. Returns (status_dict, new_optimizer_state, new_peak_equity, signals, plan).
     Reloads config each tick so optimizer updates apply without restart.
     """
     config = load_modular_config()
@@ -51,7 +51,8 @@ def tick(
             trade_history = fetch_trade_history()
             perf = PerformanceLog(equity=snapshot.equity, ts=time.time())
             upd, new_opt_state = run_optimizer(trade_history, new_opt_state, perf, 0.0)
-            return status, new_opt_state, new_peak
+            ledger.record("exec_tick_summary", {"orders_placed": 0, "targets_count": 0, "skip_reasons": [{"reason": "no_symbols"}]})
+            return status, new_opt_state, new_peak, None, None
 
         signals = run_signal(snapshot, config)
         status["step"] = "signal"
@@ -60,7 +61,8 @@ def tick(
             status["reason"] = "no_signals"
             status["active_symbols"] = []
             status["gross_exposure"] = 0.0
-            return status, new_opt_state, new_peak
+            ledger.record("exec_tick_summary", {"orders_placed": 0, "targets_count": 0, "skip_reasons": [{"reason": "no_signals"}]})
+            return status, new_opt_state, new_peak, None, None
 
         drawdown_pct = 100.0 * (1.0 - snapshot.equity / new_peak) if new_peak > 0 else 0.0
         btc_out = (signals.outputs or {}).get("BTCUSDT")
@@ -91,7 +93,9 @@ def tick(
             upd, new_opt_state = run_optimizer(trade_history, new_opt_state, perf, drawdown)
             if upd.overrides:
                 status["optimizer"] = upd.overrides
-            return status, new_opt_state, new_peak
+            targets_count = status.get("decisions_allowed", 0)
+            ledger.record("exec_tick_summary", {"orders_placed": 0, "targets_count": targets_count, "skip_reasons": [{"reason": "no_trades_allowed"}]})
+            return status, new_opt_state, new_peak, signals, plan
 
         result = execute_risk_plan(risk, snapshot, config)
         status["step"] = "execution"
@@ -133,9 +137,14 @@ def tick(
 
         status["equity"] = equity
         status["peak_equity"] = new_peak
-        return status, new_opt_state, new_peak
+        orders_placed = len(result.order_ids)
+        targets_count = len(plan.targets)
+        skip_reasons = [{"reason": r} for r in result.errors] if result.errors else []
+        ledger.record("exec_tick_summary", {"orders_placed": orders_placed, "targets_count": targets_count, "skip_reasons": skip_reasons})
+        return status, new_opt_state, new_peak, signals, plan
 
     except Exception as exc:
         logger.exception("orchestrator tick failed: %s", exc)
         status["reason"] = str(exc)
-        return status, new_opt_state, new_peak
+        ledger.record("exec_tick_summary", {"orders_placed": 0, "targets_count": 0, "skip_reasons": [{"reason": str(exc)[:100]}]})
+        return status, new_opt_state, new_peak, None, None

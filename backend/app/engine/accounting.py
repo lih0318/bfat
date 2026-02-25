@@ -189,7 +189,7 @@ class AccountingLedger:
         result: list[dict[str, Any]] = []
         live_types = ("fill", "exit", "order", "exec_tick_skip", "exec_tick_summary",
                       "tp1_filled", "tp2_filled", "sl_moved_to_breakeven", "sl_triggered",
-                      "chandelier_sl_updated")
+                      "chandelier_sl_updated", "engine_start", "engine_stop")
         for ev in reversed(self._events):
             if len(result) >= limit:
                 break
@@ -246,6 +246,10 @@ class AccountingLedger:
             return f"SL 트리거 {sym} @ {ev.get('message', '')}"
         if et == "chandelier_sl_updated":
             return f"Chandelier SL 갱신 {sym}: {ev.get('message', '')}"
+        if et == "engine_start":
+            return f"Engine started (profile={ev.get('profile', '')}, equity={ev.get('equity', 0):.2f} USDT)"
+        if et == "engine_stop":
+            return f"Engine stopped (reason={ev.get('reason', '')})"
         return f"{et}: {sym}"
 
     def clear(self) -> None:

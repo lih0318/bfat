@@ -297,6 +297,8 @@ def market_regime(
 @router.get("/portfolio")
 def portfolio() -> list[dict[str, Any]]:
     """Per-symbol target_qty, current_qty, weight, TrendScore."""
+    if modular_engine.running:
+        return modular_engine.get_portfolio()
     return engine.get_portfolio()
 
 
@@ -306,7 +308,10 @@ def portfolio() -> list[dict[str, Any]]:
 @router.get("/signals")
 def signals() -> list[dict[str, Any]]:
     """Full universe TrendScore snapshot with vol/atr/reasoning."""
-    signals_data = engine.get_signals()
+    if modular_engine.running:
+        signals_data = modular_engine.get_signals()
+    else:
+        signals_data = engine.get_signals()
     
     # Fetch vol/atr for all symbols
     if signals_data:
@@ -396,7 +401,7 @@ def _empty_insight() -> dict[str, Any]:
 def insight() -> dict[str, Any]:
     """Comprehensive engine insight data for Insight tab."""
     if modular_engine.running:
-        return _empty_insight()
+        return modular_engine.get_insight()
     insight_data = engine.get_insight()
     signals_data = signals()
     insight_data["signals"] = signals_data
