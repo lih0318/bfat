@@ -99,14 +99,40 @@ class ModularRunner:
 
         universe_size = self._last_status.get("universe_size", self._last_status.get("symbols_count", 0))
 
+        # Compute market_summary from _last_signals snapshots (Bull/Neutral/Bear, avg TrendScore)
+        bullish_count = 0
+        bearish_count = 0
+        neutral_count = 0
+        total_score = 0.0
+        if self._last_signals and self._last_signals.snapshots:
+            for snap in self._last_signals.snapshots.values():
+                total_score += snap.final_score
+                if snap.final_score > 0.1:
+                    bullish_count += 1
+                elif snap.final_score < -0.1:
+                    bearish_count += 1
+                else:
+                    neutral_count += 1
+        avg_score = total_score / len(self._last_signals.snapshots) if self._last_signals and self._last_signals.snapshots else 0.0
+        if avg_score >= 0.3:
+            temperature = "강한 상승"
+        elif avg_score >= 0.1:
+            temperature = "약한 상승"
+        elif avg_score <= -0.3:
+            temperature = "강한 하락"
+        elif avg_score <= -0.1:
+            temperature = "약한 하락"
+        else:
+            temperature = "중립"
+
         return {
             "engine_pulse": engine_pulse,
             "market_summary": {
-                "bullish_count": 0,
-                "bearish_count": 0,
-                "neutral_count": 0,
-                "avg_trend_score": 0.0,
-                "temperature": "중립",
+                "bullish_count": bullish_count,
+                "bearish_count": bearish_count,
+                "neutral_count": neutral_count,
+                "avg_trend_score": round(avg_score, 4),
+                "temperature": temperature,
             },
             "risk_status": {
                 "equity": round(equity, 2),
