@@ -176,6 +176,7 @@ class EngineService:
         await user.stop()
         self._market_stream = None
         self._user_stream = None
+        self._engine = None
 
     async def start(self) -> None:
         """Start engine in background."""
