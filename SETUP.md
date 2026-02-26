@@ -18,18 +18,83 @@ sudo apt install -y python3 python3-pip python3-venv nodejs npm nginx
 
 Place the BFAT project on the server.
 
-## 3. Backend Environment
+## 3. Backend Environment (API Key – Git에 커밋하지 않음)
 
-Create `backend/.env`:
+`.env`는 `.gitignore`에 포함되어 있으므로 **절대 Git에 올라가지 않습니다**. 서버에서 직접 설정하세요.
+
+### 방법 A: backend/.env 파일 생성 (권장)
+
+```bash
+cd /path/to/bfat/backend
+cp .env.example .env
+nano .env   # 또는 vim
+```
+
+다음 내용을 입력 후 저장:
 
 ```
-BINANCE_API_KEY=your_api_key
-BINANCE_API_SECRET=your_api_secret
+BINANCE_API_KEY=실제_API_키
+BINANCE_API_SECRET=실제_시크릿
 BINANCE_TESTNET=true
 BFAT_SYMBOL=BTCUSDT
 ```
 
-For production, set `BINANCE_TESTNET=false`.
+프로덕션 시 `BINANCE_TESTNET=false` 로 변경.
+
+### 방법 B: 환경 변수로 직접 전달
+
+```bash
+export BINANCE_API_KEY="실제_API_키"
+export BINANCE_API_SECRET="실제_시크릿"
+export BINANCE_TESTNET=true
+./run_backend.sh
+```
+
+또는 한 줄:
+
+```bash
+BINANCE_API_KEY=xxx BINANCE_API_SECRET=yyy BINANCE_TESTNET=true uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
+### 방법 C: systemd 서비스에서 환경 변수 사용
+
+`/etc/systemd/system/bfat.service`:
+
+```ini
+[Unit]
+Description=BFAT Backend
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/path/to/bfat/backend
+Environment="BINANCE_API_KEY=실제_API_키"
+Environment="BINANCE_API_SECRET=실제_시크릿"
+Environment="BINANCE_TESTNET=false"
+ExecStart=/path/to/bfat/backend/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`systemctl daemon-reload && systemctl start bfat`
+
+### 방법 D: 환경 변수 파일 (별도 보관)
+
+```bash
+# 서버에 /opt/bfat/secrets.env 생성 (권한 600)
+echo 'BINANCE_API_KEY=xxx' > /opt/bfat/secrets.env
+echo 'BINANCE_API_SECRET=yyy' >> /opt/bfat/secrets.env
+chmod 600 /opt/bfat/secrets.env
+
+# 실행 시 로드
+set -a
+source /opt/bfat/secrets.env
+set +a
+./run_backend.sh
+```
 
 ## 4. Run Backend Manually
 
