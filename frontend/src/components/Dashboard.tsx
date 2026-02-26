@@ -85,7 +85,7 @@ export function Dashboard() {
   }, [accessToken])
 
   const engineState = status?.engine_state ?? 'stopped'
-  const isRunning = engineState === 'open' || engineState === 'entering' || engineState === 'closing'
+  const isRunning = engineState !== 'stopped'
   const displayState = isRunning ? 'RUNNING' : 'STOPPED'
 
   const handleStart = async () => {

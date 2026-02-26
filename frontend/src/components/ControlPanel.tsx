@@ -18,7 +18,7 @@ export function ControlPanel({
   onStop,
 }: ControlPanelProps) {
   const [confirmStop, setConfirmStop] = useState(false)
-  const isRunning = engineState === 'open' || engineState === 'entering' || engineState === 'closing'
+  const isRunning = engineState !== 'stopped'
 
   const handleStopClick = () => {
     if (!confirmStop) {
