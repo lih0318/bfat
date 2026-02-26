@@ -41,15 +41,26 @@ class DatabaseFactory:
     def init_tables(self) -> None:
         """Create tables from migrations. Call on startup."""
         migrations_dir = Path(__file__).resolve().parent.parent.parent.parent / "migrations"
-        migration_file = migrations_dir / "001_initial.sql"
-        if not migration_file.exists():
-            raise FileNotFoundError(f"Migration not found: {migration_file}")
-
-        sql = _load_migration(migration_file)
         conn = self.get_connection()
-        conn.executescript(sql)
-        conn.commit()
-        logger.info("database_tables_initialized", extra={"migration": "001_initial"})
+        for name in (
+            "001_initial",
+            "002_add_initial_stop_r",
+            "003_add_r_validation_status",
+            "004_add_trade_context",
+        ):
+            migration_file = migrations_dir / f"{name}.sql"
+            if not migration_file.exists():
+                continue
+            try:
+                sql = _load_migration(migration_file)
+                conn.executescript(sql)
+                conn.commit()
+            except sqlite3.OperationalError as e:
+                if "duplicate column name" in str(e).lower():
+                    pass
+                else:
+                    raise
+            logger.info("database_migration_applied", extra={"migration": name})
 
     def close(self) -> None:
         """Close the connection."""

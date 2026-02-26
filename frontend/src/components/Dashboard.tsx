@@ -1,5 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+import { apiFetch } from '../api/client'
+import { useAuth } from '../context/AuthContext'
+import { ChartTab } from './ChartTab'
 import { ControlPanel } from './ControlPanel'
+import { InsightTab } from './InsightTab'
 import { LogsPanel } from './LogsPanel'
 import { PositionCard, type PositionData } from './PositionCard'
 
@@ -8,21 +12,38 @@ interface StatusData {
   position: Record<string, unknown> | null
   last_signal: Record<string, string> | null
   current_stop_price: number | null
+  r_multiple: number | null
+  r_validation_status: string | null
+  system_health: string
   equity: number
   kill_switch_triggered: boolean
   error: string | null
 }
 
-const WS_URL = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/status`
+interface InsightData {
+  regime: string
+}
+
+type TabId = 'dashboard' | 'insight' | 'logs' | 'chart'
 
 export function Dashboard() {
+  const { accessToken, logout, username } = useAuth()
   const [status, setStatus] = useState<StatusData | null>(null)
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'logs' | 'system'>('dashboard')
+  const [activeTab, setActiveTab] = useState<TabId>('dashboard')
+  const [userOpen, setUserOpen] = useState(false)
+  const [regime, setRegime] = useState<string | null>(null)
+
+  const wsUrl = useCallback(() => {
+    const base = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/status`
+    return accessToken ? `${base}?token=${encodeURIComponent(accessToken)}` : null
+  }, [accessToken])
 
   useEffect(() => {
+    const url = wsUrl()
+    if (!url) return
     let ws: WebSocket | null = null
     const connect = () => {
-      ws = new WebSocket(WS_URL)
+      ws = new WebSocket(url)
       ws.onmessage = (e) => {
         try {
           const data = JSON.parse(e.data)
@@ -39,67 +60,181 @@ export function Dashboard() {
     return () => {
       ws?.close()
     }
-  }, [])
+  }, [wsUrl])
+
+  useEffect(() => {
+    if (!accessToken) return
+    let cancelled = false
+    async function fetch_() {
+      const res = await apiFetch('/api/insight', { token: accessToken })
+      if (cancelled) return
+      if (res.ok) {
+        const d: InsightData = await res.json()
+        setRegime(d.regime ?? null)
+      }
+    }
+    fetch_()
+    const interval = setInterval(fetch_, 30000)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [accessToken])
 
   const engineState = status?.engine_state ?? 'stopped'
   const isRunning = engineState === 'open' || engineState === 'entering' || engineState === 'closing'
   const displayState = isRunning ? 'RUNNING' : 'STOPPED'
 
   const handleStart = async () => {
-    await fetch('/api/start', { method: 'POST' })
+    const res = await apiFetch('/api/start', {
+      method: 'POST',
+      token: accessToken,
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.detail ?? 'Start failed')
+    }
   }
 
   const handleStop = async () => {
-    await fetch('/api/stop', { method: 'POST' })
+    const res = await apiFetch('/api/stop', {
+      method: 'POST',
+      token: accessToken,
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.detail ?? 'Stop failed')
+    }
   }
 
+  const regimeColors: Record<string, string> = {
+    Trending: 'bg-[var(--positive)]/20 text-[var(--positive)]',
+    Ranging: 'bg-[var(--accent)]/20 text-[var(--accent)]',
+    'High Volatility': 'bg-[var(--negative)]/20 text-[var(--negative)]',
+  }
+  const regimeClass = regime ? regimeColors[regime] ?? 'bg-[var(--border)]/30 text-[var(--text-muted)]' : 'bg-[var(--border)]/30 text-[var(--text-muted)]'
+
+  const pos = status?.position as PositionData | null
+  const rMultiple: number | null =
+    status?.r_multiple != null ? Number(status.r_multiple) : null
+  const rValidationStatus = status?.r_validation_status ?? null
+
+  const formatR = (r: number | null) => (r != null ? `${r.toFixed(2)}R` : '--')
+
+  const rBadgeClasses: Record<string, string> = {
+    OK: 'bg-[var(--positive)]/20 text-[var(--positive)]',
+    WARNING: 'bg-yellow-500/20 text-yellow-400',
+    CRITICAL: 'bg-[var(--negative)]/20 text-[var(--negative)]',
+    ANOMALY: 'bg-purple-500/20 text-purple-400',
+    CRITICAL_OUTLIER: 'bg-[var(--negative)]/20 text-[var(--negative)]',
+  }
+  const rBadgeLabels: Record<string, string> = {
+    OK: 'R VALIDATED',
+    WARNING: 'R CHECK WARNING',
+    CRITICAL: 'R CALCULATION ERROR',
+    ANOMALY: 'R OUTLIER DETECTED',
+    CRITICAL_OUTLIER: 'R CRITICAL OUTLIER',
+  }
+  const systemHealthClass =
+    status?.system_health === 'DEGRADED'
+      ? 'bg-amber-500/20 text-amber-400'
+      : 'bg-[var(--positive)]/20 text-[var(--positive)]'
+
   return (
-    <div className="min-h-screen bg-[#0f1419] text-[var(--text)]">
-      <header className="border-b border-[var(--border)] bg-[var(--bg-card)] px-4 py-4 md:px-6">
-        <div className="mx-auto flex max-w-6xl flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
+    <div className="min-h-screen bg-[#0a0e12] text-[var(--text)]">
+      <header className="sticky top-0 z-10 border-b border-[var(--border)] bg-[var(--bg-card)]/95 backdrop-blur px-4 py-3 md:px-6 shadow-[var(--shadow)]">
+        <div className="mx-auto flex max-w-6xl flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-3">
             <h1 className="text-xl font-bold text-[var(--accent)]">BFAT</h1>
-            <p className="text-sm text-[var(--text-muted)]">Bitcoin Futures Auto Trader</p>
-          </div>
-          <div className="flex flex-wrap items-center gap-4">
             <div
-              className={`rounded-lg px-4 py-2 font-semibold ${
-                isRunning ? 'bg-[var(--positive)]/20 text-[var(--positive)]' : 'bg-[var(--border)]/30 text-[var(--text-muted)]'
+              className={`h-2.5 w-2.5 rounded-full flex-shrink-0 ${
+                isRunning ? 'bg-[var(--positive)]' : 'bg-[var(--text-muted)]'
               }`}
+              title={displayState}
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            {regime && (
+              <span className={`rounded-lg px-3 py-1.5 text-sm font-medium ${regimeClass}`}>
+                {regime}
+              </span>
+            )}
+            {rValidationStatus != null && (
+              <span
+                className={`rounded-lg px-3 py-1.5 text-sm font-medium ${
+                  rBadgeClasses[rValidationStatus] ?? 'bg-[var(--border)]/30 text-[var(--text-muted)]'
+                }`}
+              >
+                {rBadgeLabels[rValidationStatus] ?? rValidationStatus}
+              </span>
+            )}
+            <span
+              className={`rounded-lg px-3 py-1.5 text-xs font-medium ${systemHealthClass}`}
+              title={status?.system_health ?? 'HEALTHY'}
             >
-              {displayState}
-            </div>
-            <div className="rounded-lg border border-[var(--border)] px-4 py-2">
+              {status?.system_health === 'DEGRADED' ? 'DEGRADED' : 'HEALTHY'}
+            </span>
+            <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] px-4 py-2">
               <span className="text-xs text-[var(--text-muted)]">Equity</span>
               <p className="font-medium">{status?.equity != null ? status.equity.toFixed(2) : '–'} USDT</p>
             </div>
             {status?.kill_switch_triggered && (
-              <div className="rounded-lg bg-[var(--negative)]/20 px-4 py-2 text-[var(--negative)] font-semibold">
+              <div className="rounded-xl bg-[var(--negative)]/20 px-4 py-2 text-[var(--negative)] font-semibold">
                 KILL SWITCH
               </div>
             )}
             {status?.error && (
-              <div className="rounded-lg bg-[var(--negative)]/20 px-4 py-2 text-[var(--negative)]">
+              <div className="rounded-xl bg-[var(--negative)]/20 px-4 py-2 text-[var(--negative)]">
                 CRITICAL
               </div>
             )}
+            <div className="relative ml-2">
+              <button
+                onClick={() => setUserOpen((o) => !o)}
+                className="flex min-h-[44px] items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2 touch-manipulation hover:bg-[var(--border)]/30"
+              >
+                <span className="text-sm font-medium">{username ?? 'User'}</span>
+                <svg className="h-4 w-4 text-[var(--text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+              {userOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-10"
+                    onClick={() => setUserOpen(false)}
+                  />
+                  <div className="absolute right-0 top-full z-20 mt-1 w-40 rounded-xl border border-[var(--border)] bg-[var(--bg-card)] py-1 shadow-lg">
+                    <button
+                      onClick={() => {
+                        setUserOpen(false)
+                        logout()
+                      }}
+                      className="w-full px-4 py-2 text-left text-sm hover:bg-[var(--bg-elevated)] touch-manipulation"
+                    >
+                      Logout
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         </div>
       </header>
 
       <nav className="border-b border-[var(--border)] bg-[var(--bg-elevated)]">
         <div className="mx-auto flex max-w-6xl gap-0">
-          {(['dashboard', 'logs', 'system'] as const).map((tab) => (
+          {(['dashboard', 'insight', 'logs', 'chart'] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
               className={`min-h-[48px] flex-1 px-4 font-medium capitalize transition touch-manipulation md:flex-none md:px-6 ${
                 activeTab === tab
                   ? 'border-b-2 border-[var(--accent)] text-[var(--accent)]'
-                  : 'text-[var(--text-muted)] hover:text-white'
+                  : 'text-[var(--text-muted)] hover:text-[var(--text)]'
               }`}
             >
-              {tab === 'system' ? 'System Info' : tab}
+              {tab}
             </button>
           ))}
         </div>
@@ -111,14 +246,34 @@ export function Dashboard() {
             <div className="md:col-span-2 lg:col-span-3">
               <ControlPanel engineState={engineState} onStart={handleStart} onStop={handleStop} />
             </div>
+            <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4 md:p-5 shadow-[var(--shadow)]">
+              <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+                Equity
+              </h3>
+              <p className="text-2xl font-semibold">{status?.equity != null ? status.equity.toFixed(2) : '–'} USDT</p>
+            </div>
             <div className="lg:col-span-2">
               <PositionCard
-                position={(status?.position as PositionData | null) ?? null}
+                position={pos ?? null}
                 currentStopPrice={status?.current_stop_price ?? null}
                 rMultiple={null}
               />
             </div>
-            <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-4 md:p-5">
+            <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4 md:p-5 shadow-[var(--shadow)]">
+              <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+                Stop Level
+              </h3>
+              <p className="text-lg font-medium">{status?.current_stop_price ?? pos?.stop_price ?? '–'}</p>
+            </div>
+            <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4 md:p-5 shadow-[var(--shadow)]">
+              <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+                R Multiple
+              </h3>
+              <p className={`text-lg font-medium ${rMultiple != null ? (rMultiple >= 0 ? 'text-[var(--positive)]' : 'text-[var(--negative)]') : ''}`}>
+                {formatR(rMultiple)}
+              </p>
+            </div>
+            <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4 md:p-5 shadow-[var(--shadow)]">
               <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-[var(--text-muted)]">
                 Last Signal
               </h3>
@@ -135,26 +290,21 @@ export function Dashboard() {
           </div>
         )}
 
+        {activeTab === 'insight' && (
+          <div className="space-y-4">
+            <InsightTab />
+          </div>
+        )}
+
         {activeTab === 'logs' && (
           <div className="space-y-4">
             <LogsPanel />
           </div>
         )}
 
-        {activeTab === 'system' && (
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-4 md:p-5">
-              <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-[var(--text-muted)]">
-                Engine State
-              </h3>
-              <p className="font-medium capitalize">{engineState}</p>
-            </div>
-            <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-4 md:p-5">
-              <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-[var(--text-muted)]">
-                Status
-              </h3>
-              <pre className="max-h-[300px] overflow-auto text-xs">{JSON.stringify(status ?? {}, null, 2)}</pre>
-            </div>
+        {activeTab === 'chart' && (
+          <div className="space-y-4">
+            <ChartTab />
           </div>
         )}
       </main>

@@ -69,7 +69,7 @@ class StateMachine:
         self._pending_signal = None
 
     def on_stop_update(self, new_stop_phase: StopPhase, new_stop_price: float) -> None:
-        """OPEN → OPEN. StopPhase and stop_price update. Both must be favorable."""
+        """OPEN → OPEN. StopPhase and stop_price update. initial_stop_price is immutable."""
         if self._state != PositionState.OPEN:
             raise ValueError(
                 f"Cannot update stop in {self._state.value}, must be OPEN"
@@ -87,12 +87,14 @@ class StateMachine:
                 f"Stop price not favorable for {self._position.side.value}: "
                 f"{current_price} → {new_stop_price}"
             )
+        initial_stop = self._position.initial_stop_price
         self._position = Position(
             symbol=self._position.symbol,
             side=self._position.side,
             size=self._position.size,
             entry_price=self._position.entry_price,
             stop_price=new_stop_price,
+            initial_stop_price=initial_stop,
             stop_phase=new_stop_phase,
             entry_time=self._position.entry_time,
             correlation_id=self._position.correlation_id,

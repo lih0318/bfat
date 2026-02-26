@@ -1,6 +1,8 @@
 """BFAT orchestrator. No business logic. Coordinates modules only."""
 
+import hashlib
 from datetime import datetime
+from decimal import Decimal, getcontext
 from typing import Any
 
 from app.core.execution import BinanceExecutionClient, _generate_client_order_id
@@ -128,6 +130,9 @@ def _atr(candles: list[dict], period: int = 14) -> float:
 def _ts() -> str:
     """ISO timestamp."""
     return datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+
+getcontext().prec = 28
 
 
 class BFATEngine:
@@ -263,6 +268,7 @@ class BFATEngine:
                     size=actual_size,
                     entry_price=actual_entry_price,
                     stop_price=stop_price,
+                    initial_stop_price=stop_price,
                     stop_phase=StopPhase.INITIAL,
                     entry_time=_ts(),
                     correlation_id=entry_id,
@@ -364,8 +370,14 @@ class BFATEngine:
                 "State transition failed after trailing; new stop remains active"
             ) from e
 
-    def on_position_closed(self, exit_price: float, equity: float) -> None:
-        """Handle position close: R, kill switch, persist, state reset."""
+    def on_position_closed(
+        self,
+        exit_price: float,
+        equity: float,
+        entry_fee: float = 0.0,
+        exit_fee: float = 0.0,
+    ) -> None:
+        """Handle position close: deterministic R at close only, kill switch, persist, state reset."""
         self._check_state_consistency()
         pos = self._state_machine.position
         if pos is None:
@@ -374,28 +386,110 @@ class BFATEngine:
             self._state_machine.on_exit_requested()
         except Exception as e:
             raise RuntimeError("State transition failed") from e
-        r = self._risk_manager.calculate_r_multiple(
-            pos.entry_price,
-            exit_price,
-            pos.stop_price,
-            pos.side,
-        )
-        self._kill_switch.register_trade_result(r)
-        self._kill_switch.update_equity(equity)
+
+        de = lambda x: Decimal(str(x))
+        entry = de(pos.entry_price)
+        initial_stop = de(pos.initial_stop_price)
+        exit_px = de(exit_price)
+        size_d = de(pos.size)
+        fee_entry = de(entry_fee)
+        fee_exit = de(exit_fee)
+
         if pos.side == Side.LONG:
-            pnl = (exit_price - pos.entry_price) * pos.size
+            gross_pnl_d = (exit_px - entry) * size_d
         else:
-            pnl = (pos.entry_price - exit_price) * pos.size
+            gross_pnl_d = (entry - exit_px) * size_d
+        net_pnl_d = gross_pnl_d - fee_entry - fee_exit
+
+        initial_risk_d = abs(entry - initial_stop) * size_d
+        r_multiple_d = (
+            net_pnl_d / initial_risk_d if initial_risk_d > 0 else Decimal("0")
+        )
+
+        r_multiple = float(r_multiple_d)
+        gross_pnl = float(gross_pnl_d)
+        net_pnl = float(net_pnl_d)
+        initial_risk = float(initial_risk_d)
+
+        r_validation_status = "OK"
+        if size_d <= 0:
+            r_validation_status = "CRITICAL"
+        elif initial_risk_d <= 0:
+            r_validation_status = "CRITICAL"
+        elif abs(r_multiple_d) > 100:
+            r_validation_status = "CRITICAL_OUTLIER"
+        elif abs(r_multiple_d) > 20:
+            r_validation_status = "ANOMALY"
+        elif net_pnl_d == 0 and r_multiple_d != 0:
+            r_validation_status = "WARNING"
+        else:
+            expected_pnl = r_multiple_d * initial_risk_d
+            delta = abs(expected_pnl - net_pnl_d)
+            tolerance = max(Decimal("1e-8"), Decimal("0.0001") * initial_risk_d)
+            if delta > tolerance:
+                r_validation_status = "WARNING"
+                print(
+                    f"[R VALIDATION ERROR] entry={entry}, stop={initial_stop}, "
+                    f"exit={exit_px}, size={size_d}, pnl={net_pnl_d}, "
+                    f"expected={expected_pnl}, delta={delta}"
+                )
+
+        if r_validation_status in ("CRITICAL", "CRITICAL_OUTLIER"):
+            self._system_log.insert(
+                level="CRITICAL",
+                event="r_validation_critical",
+                message=f"R validation {r_validation_status}: entry={entry}, stop={initial_stop}, exit={exit_px}, size={size_d}, initial_risk={initial_risk}",
+                payload={
+                    "entry_price": float(entry),
+                    "initial_stop": float(initial_stop),
+                    "exit_price": float(exit_px),
+                    "size": float(size_d),
+                    "initial_risk": initial_risk,
+                },
+                correlation_id=pos.correlation_id,
+            )
+
+        _q = Decimal("0.0000000001")
+        _entry_f = float(entry.quantize(_q))
+        _stop_f = float(initial_stop.quantize(_q))
+        _exit_f = float(exit_px.quantize(_q))
+        _size_f = float(size_d.quantize(_q))
+        _r_f = float(r_multiple_d.quantize(_q))
+        _risk_f = float(initial_risk_d.quantize(_q))
+        hash_input = (
+            f"{_entry_f:.10f}|"
+            f"{_stop_f:.10f}|"
+            f"{_exit_f:.10f}|"
+            f"{_size_f:.10f}|"
+            f"{_r_f:.10f}|"
+            f"{_risk_f:.10f}"
+        )
+        trade_hash = hashlib.sha256(hash_input.encode("utf-8")).hexdigest()
+        print(f"[TRADE HASH INPUT] {hash_input}")
+
+        print(
+            f"[R CHECK] entry={entry}, stop={initial_stop}, "
+            f"exit={exit_px}, size={size_d}, R={r_multiple}, status={r_validation_status}"
+        )
+
+        self._kill_switch.register_trade_result(r_multiple)
+        self._kill_switch.update_equity(equity)
         self._trade_repo.insert(
             symbol=pos.symbol,
             side=pos.side.name,
             entry_time=pos.entry_time,
-            entry_price=pos.entry_price,
-            size=pos.size,
+            entry_price=float(entry),
+            size=float(size_d),
             exit_time=_ts(),
-            exit_price=exit_price,
-            pnl=pnl,
-            pnl_r=r,
+            exit_price=float(exit_px),
+            pnl=gross_pnl,
+            gross_pnl=gross_pnl,
+            net_pnl=net_pnl,
+            initial_risk=initial_risk,
+            pnl_r=r_multiple,
+            initial_stop_price=float(initial_stop),
+            r_validation_status=r_validation_status,
+            trade_hash=trade_hash,
             stop_phase=pos.stop_phase.value,
             signal_candle_ts=self._last_signal_candle_ts,
             correlation_id=pos.correlation_id,

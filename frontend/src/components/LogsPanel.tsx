@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import { apiFetch } from '../api/client'
+import { useAuth } from '../context/AuthContext'
 
 interface LogEntry {
   id: number
@@ -11,13 +13,14 @@ interface LogEntry {
 }
 
 export function LogsPanel() {
+  const { accessToken } = useAuth()
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     const fetchLogs = async () => {
       try {
-        const res = await fetch('/api/logs?limit=50')
+        const res = await apiFetch('/api/logs?limit=50', { token: accessToken })
         const data = await res.json()
         setLogs(Array.isArray(data) ? data : [])
       } catch {
@@ -29,7 +32,7 @@ export function LogsPanel() {
     fetchLogs()
     const interval = setInterval(fetchLogs, 5000)
     return () => clearInterval(interval)
-  }, [])
+  }, [accessToken])
 
   if (loading) {
     return (

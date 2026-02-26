@@ -1,4 +1,4 @@
-# BFAT v2 - Backend (minimal; add deps as needed)
+# BFAT v2 - Backend
 fastapi>=0.109.0
 uvicorn[standard]>=0.27.0
 python-dotenv>=1.0.0
@@ -6,3 +6,6 @@ pydantic>=2.5.0
 pydantic-settings>=2.1.0
 requests>=2.31.0
 websockets>=12.0
+PyJWT>=2.8.0
+passlib[bcrypt]>=1.7.4
+python-multipart>=0.0.9

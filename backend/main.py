@@ -11,9 +11,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config.settings import Settings
 from app.core.database import DatabaseFactory
 
+from api.auth import decode_token
+from api.auth_routes import router as auth_router
 from api.engine_routes import router as engine_router
-from api.status_routes import router as status_router
 from api.log_routes import router as log_router
+from api.status_routes import router as status_router
 from services.engine_service import EngineService
 
 
@@ -21,6 +23,7 @@ from services.engine_service import EngineService
 async def lifespan(app: FastAPI):
     """Create DB, init tables, create engine service. Close on shutdown."""
     settings = Settings()
+    app.state.settings = settings
     db = DatabaseFactory(settings)
     db.init_tables()
     app.state.db = db
@@ -46,6 +49,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth_router)
 app.include_router(engine_router)
 app.include_router(status_router)
 app.include_router(log_router)
@@ -58,12 +62,21 @@ def health():
 
 @app.websocket("/ws/status")
 async def ws_status(websocket: WebSocket):
-    """Push engine status periodically to connected clients."""
+    """Push engine status periodically. Requires token query param."""
+    token = websocket.query_params.get("token")
+    settings = websocket.app.state.settings
+    if not token:
+        await websocket.close(code=4001)
+        return
+    payload = decode_token(token, settings.jwt_secret)
+    if not payload or payload.get("type") != "access":
+        await websocket.close(code=4001)
+        return
     await websocket.accept()
     interval = 1.0
     try:
         while True:
-            svc = app.state.engine_service
+            svc = websocket.app.state.engine_service
             data = svc.get_status() if svc else {"engine_state": "stopped", "error": "not configured"}
             await websocket.send_json(data)
             await asyncio.sleep(interval)

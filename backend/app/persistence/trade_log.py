@@ -25,12 +25,18 @@ class TradeRepository:
         exit_price: float,
         pnl: float,
         pnl_r: Optional[float] = None,
+        gross_pnl: Optional[float] = None,
+        net_pnl: Optional[float] = None,
+        initial_risk: Optional[float] = None,
+        initial_stop_price: Optional[float] = None,
+        r_validation_status: Optional[str] = None,
+        trade_hash: Optional[str] = None,
         stop_phase: Optional[str] = None,
         signal_candle_ts: Optional[str] = None,
         correlation_id: Optional[str] = None,
         metadata: Optional[dict] = None,
     ) -> int:
-        """Insert trade record. Returns inserted row id."""
+        """Insert trade record. R, gross_pnl, net_pnl, initial_risk, trade_hash stored at close only."""
         conn = self._db.get_connection()
         cursor = conn.cursor()
         try:
@@ -39,14 +45,18 @@ class TradeRepository:
                 """
                 INSERT INTO trade_log (
                     symbol, side, entry_time, entry_price, size,
-                    exit_time, exit_price, pnl, pnl_r, stop_phase,
-                    signal_candle_ts, correlation_id, metadata
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    exit_time, exit_price, pnl, pnl_r,
+                    gross_pnl, net_pnl, initial_risk, initial_stop_price,
+                    r_validation_status, trade_hash,
+                    stop_phase, signal_candle_ts, correlation_id, metadata
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     symbol, side, entry_time, entry_price, size,
-                    exit_time, exit_price, pnl, pnl_r, stop_phase,
-                    signal_candle_ts, correlation_id, metadata_str,
+                    exit_time, exit_price, pnl, pnl_r,
+                    gross_pnl, net_pnl, initial_risk, initial_stop_price,
+                    r_validation_status, trade_hash,
+                    stop_phase, signal_candle_ts, correlation_id, metadata_str,
                 ),
             )
             conn.commit()

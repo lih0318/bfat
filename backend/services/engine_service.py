@@ -88,6 +88,9 @@ class EngineService:
                 "position": None,
                 "last_signal": None,
                 "current_stop_price": None,
+                "r_multiple": None,
+                "r_validation_status": None,
+                "system_health": "HEALTHY",
                 "equity": self._equity_cache,
                 "kill_switch_triggered": False,
                 "error": self._critical_error,
@@ -102,11 +105,14 @@ class EngineService:
                 "size": pos.size,
                 "entry_price": pos.entry_price,
                 "stop_price": pos.stop_price,
+                "initial_stop_price": pos.initial_stop_price,
                 "stop_phase": pos.stop_phase.value,
                 "entry_time": pos.entry_time,
                 "correlation_id": pos.correlation_id,
             }
         last_signal = None
+        r_multiple = None
+        r_validation_status = None
         trade_repo = self._engine._trade_repo
         trades = trade_repo.query(symbol=self._settings.bfat_symbol, limit=1)
         if trades:
@@ -117,12 +123,21 @@ class EngineService:
                 "signal_time": t.get("entry_time", ""),
                 "signal_candle_ts": t.get("signal_candle_ts", "") or "",
             }
+            r_val = t.get("pnl_r")
+            r_multiple = float(r_val) if r_val is not None else None
+            r_validation_status = t.get("r_validation_status") or None
         kill = self._engine._kill_switch
+        system_health = "HEALTHY"
+        if r_validation_status in ("CRITICAL", "CRITICAL_OUTLIER"):
+            system_health = "DEGRADED"
         return {
             "engine_state": sm.state.value,
             "position": pos_dict,
             "last_signal": last_signal,
             "current_stop_price": pos.stop_price if pos else None,
+            "r_multiple": r_multiple,
+            "r_validation_status": r_validation_status,
+            "system_health": system_health,
             "equity": self._equity_cache,
             "kill_switch_triggered": kill.is_triggered(),
             "error": self._critical_error,
@@ -186,3 +201,56 @@ class EngineService:
     def get_status(self) -> dict[str, Any]:
         """Return current status."""
         return self._get_status()
+
+    def get_trades(self, symbol: str, limit: int = 20, offset: int = 0) -> list[dict[str, Any]]:
+        """Return closed trades with stored r_multiple from DB only."""
+        trade_repo = None
+        if self._engine is not None:
+            trade_repo = getattr(self._engine, "_trade_repo", None)
+        if trade_repo is None:
+            trade_repo, _, _ = create_persistence(self._db)
+        rows = trade_repo.query(symbol=symbol, limit=limit, offset=offset)
+        return [
+            {
+                "id": r.get("id"),
+                "symbol": r.get("symbol"),
+                "side": r.get("side"),
+                "entry_time": r.get("entry_time"),
+                "entry_price": r.get("entry_price"),
+                "exit_time": r.get("exit_time"),
+                "exit_price": r.get("exit_price"),
+                "size": r.get("size"),
+                "initial_stop_price": r.get("initial_stop_price"),
+                "pnl": r.get("pnl"),
+                "r_multiple": r.get("pnl_r"),
+                "r_validation_status": r.get("r_validation_status"),
+            }
+            for r in rows
+        ]
+
+    def get_insight(self) -> dict[str, Any]:
+        """Return last strategy evaluation for insight API."""
+        default = {
+            "regime": "Unknown",
+            "volatility_score": 0.0,
+            "bb_width_percentile": 0.0,
+            "atr_value": 0.0,
+            "volume_ratio": 0.0,
+            "engine_reasoning": ["No evaluation yet. Start the engine to receive insights."],
+        }
+        if self._engine is None:
+            return default
+        strategy = getattr(self._engine, "_strategy", None)
+        if strategy is None:
+            return default
+        details = getattr(strategy, "get_last_evaluation_details", lambda: {})()
+        if not details:
+            return default
+        return {
+            "regime": details.get("regime", "Unknown"),
+            "volatility_score": details.get("volatility_score", 0.0),
+            "bb_width_percentile": details.get("bb_width_percentile", 0.0),
+            "atr_value": details.get("atr_value", 0.0),
+            "volume_ratio": details.get("volume_ratio", 0.0),
+            "engine_reasoning": details.get("engine_reasoning", []),
+        }

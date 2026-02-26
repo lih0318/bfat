@@ -2,7 +2,9 @@
 
 from typing import Optional
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
+
+from api.deps import get_current_user
 
 router = APIRouter(prefix="/api", tags=["logs"])
 
@@ -10,6 +12,7 @@ router = APIRouter(prefix="/api", tags=["logs"])
 @router.get("/logs")
 async def get_logs(
     request: Request,
+    _: str = Depends(get_current_user),
     level: Optional[str] = None,
     limit: Optional[int] = 100,
     offset: Optional[int] = 0,
