@@ -32,6 +32,9 @@ export function Dashboard() {
   const [activeTab, setActiveTab] = useState<TabId>('dashboard')
   const [userOpen, setUserOpen] = useState(false)
   const [regime, setRegime] = useState<string | null>(null)
+  const [startLoading, setStartLoading] = useState(false)
+  const [stopLoading, setStopLoading] = useState(false)
+  const [controlError, setControlError] = useState<string | null>(null)
 
   const wsUrl = useCallback(() => {
     const base = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/status`
@@ -86,24 +89,44 @@ export function Dashboard() {
   const displayState = isRunning ? 'RUNNING' : 'STOPPED'
 
   const handleStart = async () => {
-    const res = await apiFetch('/api/start', {
-      method: 'POST',
-      token: accessToken,
-    })
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}))
-      throw new Error(err.detail ?? 'Start failed')
+    setControlError(null)
+    setStartLoading(true)
+    try {
+      const res = await apiFetch('/api/start', {
+        method: 'POST',
+        token: accessToken,
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        const d = err.detail
+        const msg = typeof d === 'string' ? d : (Array.isArray(d) && d[0]?.msg ? d[0].msg : null) ?? 'Start failed'
+        setControlError(msg)
+      }
+    } catch (e) {
+      setControlError(e instanceof Error ? e.message : 'Start failed')
+    } finally {
+      setStartLoading(false)
     }
   }
 
   const handleStop = async () => {
-    const res = await apiFetch('/api/stop', {
-      method: 'POST',
-      token: accessToken,
-    })
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}))
-      throw new Error(err.detail ?? 'Stop failed')
+    setControlError(null)
+    setStopLoading(true)
+    try {
+      const res = await apiFetch('/api/stop', {
+        method: 'POST',
+        token: accessToken,
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        const d = err.detail
+        const msg = typeof d === 'string' ? d : (Array.isArray(d) && d[0]?.msg ? d[0].msg : null) ?? 'Stop failed'
+        setControlError(msg)
+      }
+    } catch (e) {
+      setControlError(e instanceof Error ? e.message : 'Stop failed')
+    } finally {
+      setStopLoading(false)
     }
   }
 
@@ -247,7 +270,14 @@ export function Dashboard() {
         {activeTab === 'dashboard' && (
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             <div className="md:col-span-2 lg:col-span-3">
-              <ControlPanel engineState={engineState} onStart={handleStart} onStop={handleStop} />
+              <ControlPanel
+                engineState={engineState}
+                startLoading={startLoading}
+                stopLoading={stopLoading}
+                controlError={controlError}
+                onStart={handleStart}
+                onStop={handleStop}
+              />
             </div>
             <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4 md:p-5 shadow-[var(--shadow)] ring-1 ring-white/5 backdrop-blur-sm">
               <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-[var(--text-muted)]">
