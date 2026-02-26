@@ -1,3 +1,5 @@
+@import "tailwindcss";
+
 :root {
   font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
   line-height: 1.5;
@@ -58,7 +60,6 @@ select {
   max-width: 100%;
 }
 
-/* Horizontal-scroll wrappers should stay within viewport */
 [class*="-table-wrap"] {
   -webkit-overflow-scrolling: touch;
 }

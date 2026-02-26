@@ -1,1 +1,1 @@
-# API routers
+"""BFAT dashboard API."""

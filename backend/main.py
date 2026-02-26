@@ -1,0 +1,76 @@
+"""
+BFAT unified deployment entrypoint.
+FastAPI app with API routes and WebSocket.
+"""
+import asyncio
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.config.settings import Settings
+from app.core.database import DatabaseFactory
+
+from api.engine_routes import router as engine_router
+from api.status_routes import router as status_router
+from api.log_routes import router as log_router
+from services.engine_service import EngineService
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Create DB, init tables, create engine service. Close on shutdown."""
+    settings = Settings()
+    db = DatabaseFactory(settings)
+    db.init_tables()
+    app.state.db = db
+    engine_service = EngineService(settings, db)
+    app.state.engine_service = engine_service
+    yield
+    await engine_service.stop()
+    db.close()
+
+
+app = FastAPI(
+    title="BFAT",
+    description="Bitcoin Futures Auto Trader",
+    version="2.0.0",
+    lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(engine_router)
+app.include_router(status_router)
+app.include_router(log_router)
+
+
+@app.get("/api/health")
+def health():
+    return {"status": "ok", "version": "2.0.0"}
+
+
+@app.websocket("/ws/status")
+async def ws_status(websocket: WebSocket):
+    """Push engine status periodically to connected clients."""
+    await websocket.accept()
+    interval = 1.0
+    try:
+        while True:
+            svc = app.state.engine_service
+            data = svc.get_status() if svc else {"engine_state": "stopped", "error": "not configured"}
+            await websocket.send_json(data)
+            await asyncio.sleep(interval)
+    except Exception:
+        pass
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass

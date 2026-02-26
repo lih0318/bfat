@@ -1,3 +1,6 @@
+# Database (local)
+backend/bfat.db
+
 # Keys and secrets - never commit
 .env
 backend/.env

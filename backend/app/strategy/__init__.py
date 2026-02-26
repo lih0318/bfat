@@ -1,0 +1,1 @@
+"""BFAT strategy module."""

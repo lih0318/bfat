@@ -1,3 +1,1 @@
-from .config import settings
-
-__all__ = ["settings"]
+"""BFAT core infrastructure."""

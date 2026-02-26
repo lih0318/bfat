@@ -1,1 +1,1 @@
-# Binance Futures Auto Trader - Backend
+# BFAT v2 - Backend app
