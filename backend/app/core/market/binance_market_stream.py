@@ -133,8 +133,12 @@ class BinanceMarketStream:
                                         self._equity_cache = self._equity_provider()
                                         equity = self._equity_cache
                                     except Exception:
-                                        continue
+                                        pass
                                 if equity <= 0:
+                                    try:
+                                        self._engine.evaluate_for_insight(candles_list)
+                                    except Exception:
+                                        pass
                                     continue
                                 try:
                                     self._engine.on_candle_close(candles_list, equity)

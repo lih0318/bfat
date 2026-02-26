@@ -177,6 +177,10 @@ class BFATEngine:
             if self._current_stop_order_id is not None:
                 raise RuntimeError("Invariant: FLAT must have _current_stop_order_id None")
 
+    def evaluate_for_insight(self, candles: list[dict]) -> None:
+        """Run strategy evaluation to populate Insight only. No orders, no position changes."""
+        self._strategy.evaluate(candles)
+
     def on_candle_close(self, candles: list[dict], equity: float) -> None:
         """Handle candle close: evaluate signal, place orders, or trail stop."""
         self._check_state_consistency()
