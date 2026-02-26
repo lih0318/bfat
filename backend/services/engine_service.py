@@ -146,37 +146,68 @@ class EngineService:
     async def _run(self) -> None:
         """Background: start streams and run until stopped."""
         self._critical_error = None
-        self._engine = self._build_engine()
+        _, _, system_log_repo = create_persistence(self._db)
         try:
-            eq = self._equity_provider()
-            if eq > 0:
-                self._equity_cache = eq
-        except Exception:
-            pass
-        market = BinanceMarketStream(
-            symbol=self._settings.bfat_symbol,
-            engine=self._engine,
-            equity_provider=self._equity_provider,
-            testnet=self._settings.binance_testnet,
-        )
-        user = BinanceUserStream(
-            api_key=self._settings.binance_api_key,
-            api_secret=self._settings.binance_api_secret,
-            engine=self._engine,
-            equity_provider=self._equity_provider,
-            testnet=self._settings.binance_testnet,
-        )
-        self._market_stream = market
-        self._user_stream = user
-        await market.start()
-        await user.start()
-        while self._running:
-            await asyncio.sleep(1)
-        await market.stop()
-        await user.stop()
-        self._market_stream = None
-        self._user_stream = None
-        self._engine = None
+            self._engine = self._build_engine()
+            try:
+                eq = self._equity_provider()
+                if eq > 0:
+                    self._equity_cache = eq
+            except Exception:
+                pass
+            market = BinanceMarketStream(
+                symbol=self._settings.bfat_symbol,
+                engine=self._engine,
+                equity_provider=self._equity_provider,
+                testnet=self._settings.binance_testnet,
+            )
+            user = BinanceUserStream(
+                api_key=self._settings.binance_api_key,
+                api_secret=self._settings.binance_api_secret,
+                engine=self._engine,
+                equity_provider=self._equity_provider,
+                testnet=self._settings.binance_testnet,
+            )
+            self._market_stream = market
+            self._user_stream = user
+            await market.start()
+            await user.start()
+            system_log_repo.insert(
+                level="INFO",
+                event="engine_started",
+                message="Market and user streams connected. Engine running.",
+            )
+            while self._running:
+                await asyncio.sleep(1)
+            system_log_repo.insert(
+                level="INFO",
+                event="engine_stopped",
+                message="Engine stopped. Streams disconnected.",
+            )
+            await market.stop()
+            await user.stop()
+        except Exception as e:
+            self._critical_error = str(e)
+            system_log_repo.insert(
+                level="ERROR",
+                event="engine_start_failed",
+                message=f"Engine failed: {e}",
+            )
+            if self._market_stream:
+                try:
+                    await self._market_stream.stop()
+                except Exception:
+                    pass
+            if self._user_stream:
+                try:
+                    await self._user_stream.stop()
+                except Exception:
+                    pass
+        finally:
+            self._running = False
+            self._market_stream = None
+            self._user_stream = None
+            self._engine = None
 
     async def start(self) -> None:
         """Start engine in background."""

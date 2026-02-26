@@ -34,6 +34,9 @@ export function ControlPanel({
       <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-[var(--text-muted)]">
         Control
       </h3>
+      {isRunning && (
+        <p className="mb-4 text-sm text-[var(--positive)]">엔진 실행 중 (시그널 대기 중)</p>
+      )}
       {controlError && (
         <p className="mb-4 text-sm text-[var(--negative)]">{controlError}</p>
       )}
