@@ -44,11 +44,14 @@ export function InsightTab() {
 
   if (loading) {
     return (
-      <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-6 shadow-[var(--shadow)]">
+      <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-6 shadow-[var(--shadow)] ring-1 ring-white/5 backdrop-blur-sm">
         <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-[var(--text-muted)]">
           Market Insight
         </h3>
-        <p className="text-[var(--text-muted)]">Loading...</p>
+        <div className="flex items-center gap-3 text-[var(--text-muted)]">
+          <div className="h-5 w-5 animate-spin-slow rounded-full border-2 border-[var(--border)] border-t-[var(--accent)]" />
+          <span className="text-sm">Loading...</span>
+        </div>
       </div>
     )
   }
@@ -62,7 +65,7 @@ export function InsightTab() {
   const regimeClass = regimeColors[data?.regime ?? ''] ?? regimeColors.Unknown
 
   return (
-    <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-6 shadow-[var(--shadow)]">
+    <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-6 shadow-[var(--shadow)] ring-1 ring-white/5 backdrop-blur-sm">
       <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-[var(--text-muted)]">
         Market Insight
       </h3>

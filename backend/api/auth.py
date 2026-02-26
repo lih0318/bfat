@@ -1,9 +1,9 @@
-"""JWT authentication utilities."""
+"""JWT authentication utilities. Requires PyJWT (pip install PyJWT). Do NOT install 'jwt' package."""
 
 from datetime import datetime, timedelta
 from typing import Optional
 
-import jwt
+from jwt import PyJWTError, decode as jwt_decode, encode as jwt_encode
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, OAuth2PasswordBearer
 
@@ -19,7 +19,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/login", auto_error=False)
 
 def create_access_token(username: str, secret: str) -> str:
     expire = datetime.utcnow() + timedelta(minutes=ACCESS_EXPIRE_MIN)
-    return jwt.encode(
+    return jwt_encode(
         {"sub": username, "exp": expire, "type": "access"},
         secret,
         algorithm=ALGORITHM,
@@ -28,7 +28,7 @@ def create_access_token(username: str, secret: str) -> str:
 
 def create_refresh_token(username: str, secret: str) -> str:
     expire = datetime.utcnow() + timedelta(days=REFRESH_EXPIRE_DAYS)
-    return jwt.encode(
+    return jwt_encode(
         {"sub": username, "exp": expire, "type": "refresh"},
         secret,
         algorithm=ALGORITHM,
@@ -37,8 +37,8 @@ def create_refresh_token(username: str, secret: str) -> str:
 
 def decode_token(token: str, secret: str) -> Optional[dict]:
     try:
-        return jwt.decode(token, secret, algorithms=[ALGORITHM])
-    except jwt.PyJWTError:
+        return jwt_decode(token, secret, algorithms=[ALGORITHM])
+    except PyJWTError:
         return None
 
 

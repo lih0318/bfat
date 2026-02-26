@@ -22,8 +22,16 @@ export function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[#0a0e12] px-4">
-      <div className="w-full max-w-sm rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-8 shadow-[var(--shadow)]">
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#0a0e12] px-4">
+      <div
+        className="absolute inset-0 opacity-30"
+        style={{
+          backgroundImage: `linear-gradient(rgba(212,168,83,0.04) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(212,168,83,0.04) 1px, transparent 1px)`,
+          backgroundSize: '24px 24px',
+        }}
+      />
+      <div className="relative w-full max-w-sm rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-8 shadow-xl ring-1 ring-white/5 backdrop-blur-sm">
         <h1 className="mb-2 text-2xl font-bold text-[var(--accent)]">BFAT</h1>
         <p className="mb-6 text-sm text-[var(--text-muted)]">
           Bitcoin Futures Auto Trader
@@ -40,7 +48,7 @@ export function LoginPage() {
               onChange={(e) => setUsername(e.target.value)}
               autoComplete="username"
               required
-              className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-4 py-3 text-[var(--text)] placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
+              className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-4 py-3 text-[var(--text)] transition-colors placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:ring-offset-2 focus:ring-offset-[#0a0e12]"
               placeholder="Admin"
             />
           </div>
@@ -55,7 +63,7 @@ export function LoginPage() {
               onChange={(e) => setPassword(e.target.value)}
               autoComplete="current-password"
               required
-              className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-4 py-3 text-[var(--text)] placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
+              className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-4 py-3 text-[var(--text)] transition-colors placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:ring-offset-2 focus:ring-offset-[#0a0e12]"
             />
           </div>
           {error && (
@@ -64,7 +72,7 @@ export function LoginPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full min-h-[48px] rounded-lg bg-[var(--accent)] px-4 py-3 font-medium text-[#0a0e12] transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 touch-manipulation"
+            className="w-full min-h-[48px] rounded-lg bg-[var(--accent)] px-4 py-3 font-medium text-[#0a0e12] transition-all duration-200 hover:bg-[var(--accent-hover)] hover:scale-[1.01] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100 touch-manipulation"
           >
             {loading ? 'Signing in...' : 'Sign in'}
           </button>

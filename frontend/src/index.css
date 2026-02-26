@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 :root {
-  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  font-family: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
   line-height: 1.5;
   font-weight: 400;
   color: #e8eaed;
@@ -10,9 +10,9 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  --bg-card: rgba(22, 27, 34, 0.85);
-  --bg-elevated: rgba(30, 36, 45, 0.9);
-  --border: rgba(48, 54, 61, 0.8);
+  --bg-card: rgba(22, 27, 34, 0.9);
+  --bg-elevated: rgba(30, 36, 45, 0.95);
+  --border: rgba(56, 63, 72, 0.6);
   --accent: #d4a853;
   --accent-hover: #e6bc6a;
   --positive: #22c55e;
@@ -20,6 +20,22 @@
   --text-muted: #8b949e;
   --shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
   --radius: 10px;
+  --focus-ring: 0 0 0 2px var(--accent);
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.animate-spin-slow {
+  animation: spin 0.8s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 * {

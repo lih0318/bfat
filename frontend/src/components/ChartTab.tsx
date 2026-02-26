@@ -48,7 +48,7 @@ export function ChartTab() {
   }, [])
 
   return (
-    <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] overflow-hidden shadow-[var(--shadow)]">
+    <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] overflow-hidden shadow-[var(--shadow)] ring-1 ring-white/5 backdrop-blur-sm">
       <div className="border-b border-[var(--border)] px-4 py-2">
         <h3 className="text-sm font-semibold text-[var(--text-muted)]">BTCUSDT 15m</h3>
       </div>

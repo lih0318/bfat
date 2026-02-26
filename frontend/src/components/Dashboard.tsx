@@ -191,7 +191,7 @@ export function Dashboard() {
             <div className="relative ml-2">
               <button
                 onClick={() => setUserOpen((o) => !o)}
-                className="flex min-h-[44px] items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2 touch-manipulation hover:bg-[var(--border)]/30"
+                className="flex min-h-[44px] items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2 transition-all duration-200 touch-manipulation hover:bg-[var(--border)]/30 focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:ring-offset-2 focus:ring-offset-[#0a0e12]"
               >
                 <span className="text-sm font-medium">{username ?? 'User'}</span>
                 <svg className="h-4 w-4 text-[var(--text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -210,7 +210,7 @@ export function Dashboard() {
                         setUserOpen(false)
                         logout()
                       }}
-                      className="w-full px-4 py-2 text-left text-sm hover:bg-[var(--bg-elevated)] touch-manipulation"
+                      className="w-full px-4 py-2 text-left text-sm transition-colors hover:bg-[var(--bg-elevated)] touch-manipulation focus:outline-none focus:bg-[var(--bg-elevated)]"
                     >
                       Logout
                     </button>
@@ -228,13 +228,16 @@ export function Dashboard() {
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
-              className={`min-h-[48px] flex-1 px-4 font-medium capitalize transition touch-manipulation md:flex-none md:px-6 ${
+              className={`relative min-h-[48px] flex-1 px-4 font-medium capitalize transition-all duration-200 touch-manipulation md:flex-none md:px-6 ${
                 activeTab === tab
-                  ? 'border-b-2 border-[var(--accent)] text-[var(--accent)]'
+                  ? 'text-[var(--accent)]'
                   : 'text-[var(--text-muted)] hover:text-[var(--text)]'
               }`}
             >
               {tab}
+              {activeTab === tab && (
+                <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-[var(--accent)] transition-opacity" />
+              )}
             </button>
           ))}
         </div>
@@ -246,7 +249,7 @@ export function Dashboard() {
             <div className="md:col-span-2 lg:col-span-3">
               <ControlPanel engineState={engineState} onStart={handleStart} onStop={handleStop} />
             </div>
-            <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4 md:p-5 shadow-[var(--shadow)]">
+            <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4 md:p-5 shadow-[var(--shadow)] ring-1 ring-white/5 backdrop-blur-sm">
               <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-[var(--text-muted)]">
                 Equity
               </h3>
@@ -259,13 +262,13 @@ export function Dashboard() {
                 rMultiple={null}
               />
             </div>
-            <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4 md:p-5 shadow-[var(--shadow)]">
+            <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4 md:p-5 shadow-[var(--shadow)] ring-1 ring-white/5 backdrop-blur-sm">
               <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-[var(--text-muted)]">
                 Stop Level
               </h3>
               <p className="text-lg font-medium">{status?.current_stop_price ?? pos?.stop_price ?? '–'}</p>
             </div>
-            <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4 md:p-5 shadow-[var(--shadow)]">
+            <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4 md:p-5 shadow-[var(--shadow)] ring-1 ring-white/5 backdrop-blur-sm">
               <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-[var(--text-muted)]">
                 R Multiple
               </h3>
@@ -273,7 +276,7 @@ export function Dashboard() {
                 {formatR(rMultiple)}
               </p>
             </div>
-            <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4 md:p-5 shadow-[var(--shadow)]">
+            <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4 md:p-5 shadow-[var(--shadow)] ring-1 ring-white/5 backdrop-blur-sm">
               <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-[var(--text-muted)]">
                 Last Signal
               </h3>
