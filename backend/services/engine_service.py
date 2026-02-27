@@ -5,18 +5,18 @@ import logging
 from typing import Any, Callable, Optional
 
 from app.config.settings import Settings
-
-logger = logging.getLogger(__name__)
 from app.core.database import DatabaseFactory
 from app.core.engine import BFATEngine
 from app.core.execution import BinanceExecutionClient
 from app.core.market.binance_market_stream import BinanceMarketStream
 from app.core.risk import KillSwitch, RiskManager
 from app.core.strategy.breakout import BreakoutStrategy
-from app.core.ws._binance_rest import fetch_account_equity
 from app.core.ws.binance_user_stream import BinanceUserStream
 from app.domain.state_machine import StateMachine
 from app.persistence import create_persistence
+from app.services.binance_account import BinanceAccountClient
+
+logger = logging.getLogger(__name__)
 
 
 BINANCE_REST_MAINNET = "https://fapi.binance.com"
@@ -26,9 +26,15 @@ BINANCE_REST_TESTNET = "https://testnet.binancefuture.com"
 class EngineService:
     """Wraps engine + streams. Runs in background. Exposes status."""
 
-    def __init__(self, settings: Settings, db_factory: DatabaseFactory) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        db_factory: DatabaseFactory,
+        binance_account: BinanceAccountClient,
+    ) -> None:
         self._settings = settings
         self._db = db_factory
+        self._binance_account = binance_account
         self._running = False
         self._task: Optional[asyncio.Task] = None
         self._engine: Optional[BFATEngine] = None
@@ -68,39 +74,30 @@ class EngineService:
         )
 
     def _equity_provider(self) -> float:
-        """Fetch equity from Binance REST."""
-        rest_base = (
-            BINANCE_REST_TESTNET
-            if self._settings.binance_testnet
-            else BINANCE_REST_MAINNET
-        )
-        if not self._settings.binance_api_key:
+        """Fetch equity from Binance via SDK (same as v1)."""
+        if not self._binance_account.is_configured():
             logger.warning(
-                "Equity fetch skipped: BINANCE_API_KEY not set. "
-                "Set BINANCE_API_KEY and BINANCE_API_SECRET in .env. "
-                "Real $33 account needs BINANCE_TESTNET=false (mainnet)."
+                "Equity fetch skipped: BINANCE_API_KEY/SECRET not set. "
+                "Real funds need BINANCE_TESTNET=false."
             )
             return self._equity_cache if self._equity_cache > 0 else 0.0
-        eq = fetch_account_equity(
-            self._settings.binance_api_key,
-            self._settings.binance_api_secret,
-            rest_base,
-        )
-        if eq > 0:
-            self._equity_cache = eq
-        return self._equity_cache if self._equity_cache > 0 else 0.0
+        try:
+            acct = self._binance_account.account()
+            total = float(acct.get("totalMarginBalance") or acct.get("totalWalletBalance") or 0)
+            if total > 0:
+                self._equity_cache = total
+                logger.debug("Equity: %.2f USDT", total)
+            return self._equity_cache if self._equity_cache > 0 else 0.0
+        except Exception as e:
+            logger.warning("Equity fetch failed: %s", e)
+            return self._equity_cache if self._equity_cache > 0 else 0.0
 
     def refresh_equity(self) -> None:
         """Refresh equity cache from Binance. Call when engine stopped to keep Dashboard updated."""
         try:
-            eq = self._equity_provider()
-            if eq > 0:
-                logger.debug("refresh_equity: cache updated to %.2f", eq)
+            self._equity_provider()
         except Exception as e:
-            logger.warning(
-                "refresh_equity failed (check BINANCE_API_KEY, BINANCE_API_SECRET, BINANCE_TESTNET): %s",
-                e,
-            )
+            logger.warning("refresh_equity failed: %s", e)
 
     def _get_status(self) -> dict[str, Any]:
         """Build status dict for API/WebSocket."""

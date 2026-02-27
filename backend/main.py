@@ -11,11 +11,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config.settings import Settings
 from app.core.database import DatabaseFactory
 
+from api.account_routes import router as account_router
 from api.auth import decode_token
 from api.auth_routes import router as auth_router
 from api.engine_routes import router as engine_router
 from api.log_routes import router as log_router
 from api.status_routes import router as status_router
+from app.services.binance_account import BinanceAccountClient
 from services.engine_service import EngineService
 
 
@@ -27,7 +29,15 @@ async def lifespan(app: FastAPI):
     db = DatabaseFactory(settings)
     db.init_tables()
     app.state.db = db
-    engine_service = EngineService(settings, db)
+
+    binance_account = BinanceAccountClient(
+        api_key=settings.binance_api_key,
+        api_secret=settings.binance_api_secret,
+        testnet=settings.binance_testnet,
+    )
+    app.state.binance_account_client = binance_account
+
+    engine_service = EngineService(settings, db, binance_account)
     app.state.engine_service = engine_service
 
     async def _equity_refresh_loop() -> None:
@@ -71,6 +81,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_router)
+app.include_router(account_router)
 app.include_router(engine_router)
 app.include_router(status_router)
 app.include_router(log_router)

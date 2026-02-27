@@ -4,6 +4,7 @@ uvicorn[standard]>=0.27.0
 python-dotenv>=1.0.0
 pydantic>=2.5.0
 pydantic-settings>=2.1.0
+binance-futures-connector>=4.0.0
 requests>=2.31.0
 websockets>=12.0
 # JWT: use PyJWT only. Do NOT install the deprecated 'jwt' package (pip uninstall jwt).
