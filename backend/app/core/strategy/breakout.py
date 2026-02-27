@@ -57,6 +57,29 @@ def _bollinger_bands(
     return sma_vals, upper, lower
 
 
+def _compute_bb_width_zscore(band_widths: list[float], period: int = 50) -> list[float]:
+    """
+    Compute rolling Z-score of BB width. Pure outlier measure:
+    mean/std from past-only window (excludes current), z = (current - mean) / std.
+    Pads beginning with 0.0. No lookahead.
+    """
+    result: list[float] = []
+    for i in range(len(band_widths)):
+        if i < period:
+            result.append(0.0)
+            continue
+        window = band_widths[i - period : i]
+        mean = sum(window) / len(window)
+        variance = sum((x - mean) ** 2 for x in window) / len(window)
+        std = variance ** 0.5 if variance > 0 else 0.0
+        if std == 0:
+            result.append(0.0)
+        else:
+            z = (band_widths[i] - mean) / std
+            result.append(z)
+    return result
+
+
 def _bb_width_percentile(band_widths: list[float], lookback: int) -> Optional[float]:
     """Percentile rank (0-100) of current width in lookback window."""
     if lookback <= 1:
@@ -96,6 +119,7 @@ class BreakoutStrategy:
     BB_PERIOD = 20
     BB_NUM_STD = 2.0
     LOOKBACK = 100
+    BB_WIDTH_ZSCORE_PERIOD = 50
     BREAKOUT_LOOKBACK = 20
     BREAKOUT_THRESHOLD = 0.001
     VOLUME_LOOKBACK = 20
@@ -120,6 +144,9 @@ class BreakoutStrategy:
         regime: str,
         engine_reasoning: list[str],
         close_price: float = 0.0,
+        *,
+        bb_width_z: Optional[float] = None,
+        compression_model: Optional[str] = None,
     ) -> None:
         """Store last evaluation for insight API."""
         vol_score = (atr_value / close_price) * 100.0 if close_price > 0 else 0.0
@@ -131,6 +158,10 @@ class BreakoutStrategy:
             "volume_ratio": round(volume_ratio, 4),
             "engine_reasoning": engine_reasoning,
         }
+        if bb_width_z is not None:
+            self._last_evaluation["bb_width_z"] = round(bb_width_z, 4)
+        if compression_model is not None:
+            self._last_evaluation["compression_model"] = compression_model
 
     def evaluate(self, candles: list[dict]) -> Optional[Signal]:
         """
@@ -145,6 +176,7 @@ class BreakoutStrategy:
         minimum_required = max(
             self.LOOKBACK,
             self.BB_PERIOD,
+            self.BB_WIDTH_ZSCORE_PERIOD,
             self.ATR_PERIOD + 1,
             self.BREAKOUT_LOOKBACK + 1,
             self.VOLUME_LOOKBACK,
@@ -163,12 +195,25 @@ class BreakoutStrategy:
         comp_widths = band_widths[:-1] if len(band_widths) >= 2 else band_widths
         if len(comp_widths) < self.LOOKBACK:
             return None
+        bb_width_z = _compute_bb_width_zscore(comp_widths, self.BB_WIDTH_ZSCORE_PERIOD)
+        current_z = bb_width_z[-1]
         bb_width_pct = _bb_width_percentile(comp_widths, self.LOOKBACK)
         close_price = candles[-1]["close"]
-        if bb_width_pct is None or bb_width_pct > 20:
-            self._store_evaluation(None, 0.0, 0.0, "Ranging", [
-                "BB width percentile > 20 or N/A → no compression"
-            ], close_price)
+        compression = (
+            current_z < -0.8
+            and bb_width_pct is not None
+            and bb_width_pct < 60
+        )
+        if not compression:
+            self._store_evaluation(
+                bb_width_pct, 0.0, 0.0, "Ranging",
+                [
+                    f"BB width Z-score {current_z:.2f} (need < -0.8) or percentile >= 60 → no compression",
+                ],
+                close_price,
+                bb_width_z=current_z,
+                compression_model="Z_SCORE_HYBRID",
+            )
             return None
 
         atr_vals = _atr(candles, self.ATR_PERIOD)
@@ -176,7 +221,10 @@ class BreakoutStrategy:
             return None
         current_atr = atr_vals[-1]
         if current_atr <= 0:
-            self._store_evaluation(bb_width_pct, 0.0, 0.0, "Ranging", ["ATR invalid"], close_price)
+            self._store_evaluation(
+                bb_width_pct, 0.0, 0.0, "Ranging", ["ATR invalid"], close_price,
+                bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
+            )
             return None
         movement = _last_n_candles_movement(candles, self.OVEREXTENSION_LOOKBACK)
         overext_threshold = (
@@ -187,23 +235,32 @@ class BreakoutStrategy:
         volume_ratio = current_vol / avg_vol if avg_vol and avg_vol > 0 else 0.0
 
         if movement >= overext_threshold:
-            self._store_evaluation(bb_width_pct, current_atr, volume_ratio, "High Volatility", [
-                f"BB width below {int(bb_width_pct)}th percentile → compression",
-                f"Movement {movement:.2f} >= overextension threshold {overext_threshold:.2f} → filtered",
-            ], close_price)
+            self._store_evaluation(
+                bb_width_pct, current_atr, volume_ratio, "High Volatility", [
+                    f"BB width Z-score {current_z:.2f} → compression",
+                    f"Movement {movement:.2f} >= overextension threshold {overext_threshold:.2f} → filtered",
+                ], close_price,
+                bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
+            )
             return None
 
         if avg_vol is None or avg_vol <= 0:
-            self._store_evaluation(bb_width_pct, current_atr, volume_ratio, "Ranging", [
-                f"BB width below {int(bb_width_pct)}th percentile",
-                "Average volume not available",
-            ], close_price)
+            self._store_evaluation(
+                bb_width_pct, current_atr, volume_ratio, "Ranging", [
+                    f"BB width Z-score {current_z:.2f} → compression",
+                    "Average volume not available",
+                ], close_price,
+                bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
+            )
             return None
         if current_vol < self.VOLUME_MULTIPLIER * avg_vol:
-            self._store_evaluation(bb_width_pct, current_atr, volume_ratio, "Ranging", [
-                f"BB width below {int(bb_width_pct)}th percentile → compression",
-                f"Volume {volume_ratio:.2f}x below threshold {self.VOLUME_MULTIPLIER}x",
-            ], close_price)
+            self._store_evaluation(
+                bb_width_pct, current_atr, volume_ratio, "Ranging", [
+                    f"BB width Z-score {current_z:.2f} → compression",
+                    f"Volume {volume_ratio:.2f}x below threshold {self.VOLUME_MULTIPLIER}x",
+                ], close_price,
+                bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
+            )
             return None
 
         prev_20 = candles[-(self.BREAKOUT_LOOKBACK + 1) : -1]
@@ -214,11 +271,14 @@ class BreakoutStrategy:
         signal_candle_ts = signal_time
 
         if close >= high_20 * (1 + self.BREAKOUT_THRESHOLD):
-            self._store_evaluation(bb_width_pct, current_atr, volume_ratio, "Trending", [
-                f"BB width below {int(bb_width_pct)}th percentile → compression",
-                f"Volume {volume_ratio:.2f}x above average",
-                "Breakout confirmed above 20-bar high",
-            ], close_price)
+            self._store_evaluation(
+                bb_width_pct, current_atr, volume_ratio, "Trending", [
+                    f"BB width Z-score {current_z:.2f} → compression",
+                    f"Volume {volume_ratio:.2f}x above average",
+                    "Breakout confirmed above 20-bar high",
+                ], close_price,
+                bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
+            )
             return Signal(
                 symbol=self._symbol,
                 side=Side.LONG,
@@ -226,20 +286,26 @@ class BreakoutStrategy:
                 signal_candle_ts=signal_candle_ts,
             )
         if close <= low_20 * (1 - self.BREAKOUT_THRESHOLD):
-            self._store_evaluation(bb_width_pct, current_atr, volume_ratio, "Trending", [
-                f"BB width below {int(bb_width_pct)}th percentile → compression",
-                f"Volume {volume_ratio:.2f}x above average",
-                "Breakout confirmed below 20-bar low",
-            ], close_price)
+            self._store_evaluation(
+                bb_width_pct, current_atr, volume_ratio, "Trending", [
+                    f"BB width Z-score {current_z:.2f} → compression",
+                    f"Volume {volume_ratio:.2f}x above average",
+                    "Breakout confirmed below 20-bar low",
+                ], close_price,
+                bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
+            )
             return Signal(
                 symbol=self._symbol,
                 side=Side.SHORT,
                 signal_time=signal_time,
                 signal_candle_ts=signal_candle_ts,
             )
-        self._store_evaluation(bb_width_pct, current_atr, volume_ratio, "Ranging", [
-            f"BB width below {int(bb_width_pct)}th percentile",
-            f"Volume {volume_ratio:.2f}x above average",
-            "No breakout above high or below low",
-        ], close_price)
+        self._store_evaluation(
+            bb_width_pct, current_atr, volume_ratio, "Ranging", [
+                f"BB width Z-score {current_z:.2f} → compression",
+                f"Volume {volume_ratio:.2f}x above average",
+                "No breakout above high or below low",
+            ], close_price,
+            bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
+        )
         return None
