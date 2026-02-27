@@ -23,6 +23,31 @@ BINANCE_REST_MAINNET = "https://fapi.binance.com"
 BINANCE_REST_TESTNET = "https://testnet.binancefuture.com"
 
 
+def _extract_equity_from_account(acct: dict) -> float:
+    """Extract equity from Binance account response (v2/v3)."""
+    val = acct.get("totalMarginBalance") or acct.get("totalWalletBalance")
+    if val is not None:
+        try:
+            f = float(val)
+            if f > 0:
+                return f
+        except (TypeError, ValueError):
+            pass
+    assets = acct.get("assets") or []
+    for a in assets:
+        if str(a.get("asset", "")).upper() == "USDT":
+            for k in ("marginBalance", "walletBalance", "crossWalletBalance"):
+                v = a.get(k)
+                if v is not None:
+                    try:
+                        f = float(v)
+                        if f > 0:
+                            return f
+                    except (TypeError, ValueError):
+                        pass
+    return 0.0
+
+
 class EngineService:
     """Wraps engine + streams. Runs in background. Exposes status."""
 
@@ -88,31 +113,6 @@ class EngineService:
         except Exception as e:
             logger.warning("Equity fetch failed: %s", e)
             return self._equity_cache if self._equity_cache > 0 else 0.0
-
-
-def _extract_equity_from_account(acct: dict) -> float:
-    """Extract equity from Binance account response (v2/v3)."""
-    val = acct.get("totalMarginBalance") or acct.get("totalWalletBalance")
-    if val is not None:
-        try:
-            f = float(val)
-            if f > 0:
-                return f
-        except (TypeError, ValueError):
-            pass
-    assets = acct.get("assets") or []
-    for a in assets:
-        if str(a.get("asset", "")).upper() == "USDT":
-            for k in ("marginBalance", "walletBalance", "crossWalletBalance"):
-                v = a.get(k)
-                if v is not None:
-                    try:
-                        f = float(v)
-                        if f > 0:
-                            return f
-                    except (TypeError, ValueError):
-                        pass
-    return 0.0
 
     def refresh_equity(self) -> None:
         """Refresh equity cache from Binance. Call when engine stopped to keep Dashboard updated."""

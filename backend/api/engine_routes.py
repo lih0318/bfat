@@ -1,6 +1,6 @@
 """Engine control routes: start, stop."""
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from api.deps import get_current_user
 
@@ -15,12 +15,12 @@ async def start_engine(
     """Start BFAT engine in background."""
     svc = getattr(request.app.state, "engine_service", None)
     if svc is None or not hasattr(svc, "start"):
-        return {"ok": False, "error": "Engine service not configured"}
+        raise HTTPException(status_code=503, detail="Engine service not configured")
     try:
         await svc.start()
         return {"ok": True}
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/stop")
@@ -30,9 +30,9 @@ async def stop_engine(
 ):
     svc = getattr(request.app.state, "engine_service", None)
     if svc is None or not hasattr(svc, "stop"):
-        return {"ok": False, "error": "Engine service not configured"}
+        raise HTTPException(status_code=503, detail="Engine service not configured")
     try:
         await svc.stop()
         return {"ok": True}
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
