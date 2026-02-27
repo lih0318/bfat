@@ -2,10 +2,13 @@
 
 import hashlib
 import hmac
+import logging
 import time
 import urllib.parse
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 
 def _sign(api_secret: str, params: dict) -> str:
@@ -60,18 +63,44 @@ def fetch_account_equity(
     """
     GET /fapi/v2/account.
     Returns totalMarginBalance (wallet + unrealized PnL) as float.
-    Falls back to totalWalletBalance if totalMarginBalance missing.
+    Falls back to totalWalletBalance, then assets[USDT].marginBalance.
     """
+    if not api_key or not api_secret:
+        logger.warning("fetch_account_equity: BINANCE_API_KEY or BINANCE_API_SECRET not set")
+        return 0.0
     params = {"timestamp": int(time.time() * 1000), "recvWindow": 5000}
     signed = _sign(api_secret, params)
     url = f"{base_url}/fapi/v2/account?{signed}"
     headers = {"X-MBX-APIKEY": api_key}
-    resp = requests.get(url, headers=headers)
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+    except requests.RequestException as e:
+        logger.warning("fetch_account_equity: request failed: %s", e)
+        raise RuntimeError(f"account fetch failed: {e}") from e
     if resp.status_code != 200:
+        logger.warning("fetch_account_equity: %s %s", resp.status_code, resp.text[:200])
         raise RuntimeError(f"account fetch failed: {resp.status_code} {resp.text}")
     data = resp.json()
-    bal = data.get("totalMarginBalance") or data.get("totalWalletBalance", "0")
+    bal = (
+        data.get("totalMarginBalance")
+        or data.get("totalWalletBalance")
+        or "0"
+    )
     try:
-        return float(bal)
+        _val = float(bal) if bal else 0.0
     except (TypeError, ValueError):
+        _val = 0.0
+    if _val == 0:
+        assets = data.get("assets") or []
+        for a in assets:
+            if str(a.get("asset", "")).upper() == "USDT":
+                bal = a.get("marginBalance") or a.get("walletBalance") or "0"
+                break
+    try:
+        val = float(bal)
+        if val > 0:
+            logger.info("fetch_account_equity: %.2f USDT from %s", val, base_url)
+        return val
+    except (TypeError, ValueError):
+        logger.warning("fetch_account_equity: invalid balance value %r", bal)
         return 0.0

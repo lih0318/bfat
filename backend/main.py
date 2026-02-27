@@ -33,12 +33,17 @@ async def lifespan(app: FastAPI):
     async def _equity_refresh_loop() -> None:
         """Refresh equity every 10s when engine stopped, so Dashboard stays updated."""
         while True:
+            if not engine_service._running:
+                await asyncio.get_running_loop().run_in_executor(
+                    None, engine_service.refresh_equity
+                )
             await asyncio.sleep(10)
-            if not engine_service._running:  # Engine stream handles refresh when running
-                engine_service.refresh_equity()
 
     _equity_task = asyncio.create_task(_equity_refresh_loop())
-    engine_service.refresh_equity()
+    try:
+        engine_service.refresh_equity()
+    except Exception:
+        pass
 
     yield
     _equity_task.cancel()

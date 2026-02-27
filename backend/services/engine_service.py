@@ -1,9 +1,12 @@
 """Engine service: runs BFAT engine + WebSocket streams in background."""
 
 import asyncio
+import logging
 from typing import Any, Callable, Optional
 
 from app.config.settings import Settings
+
+logger = logging.getLogger(__name__)
 from app.core.database import DatabaseFactory
 from app.core.engine import BFATEngine
 from app.core.execution import BinanceExecutionClient
@@ -71,6 +74,13 @@ class EngineService:
             if self._settings.binance_testnet
             else BINANCE_REST_MAINNET
         )
+        if not self._settings.binance_api_key:
+            logger.warning(
+                "Equity fetch skipped: BINANCE_API_KEY not set. "
+                "Set BINANCE_API_KEY and BINANCE_API_SECRET in .env. "
+                "Real $33 account needs BINANCE_TESTNET=false (mainnet)."
+            )
+            return self._equity_cache if self._equity_cache > 0 else 0.0
         eq = fetch_account_equity(
             self._settings.binance_api_key,
             self._settings.binance_api_secret,
@@ -83,9 +93,14 @@ class EngineService:
     def refresh_equity(self) -> None:
         """Refresh equity cache from Binance. Call when engine stopped to keep Dashboard updated."""
         try:
-            self._equity_provider()
-        except Exception:
-            pass
+            eq = self._equity_provider()
+            if eq > 0:
+                logger.debug("refresh_equity: cache updated to %.2f", eq)
+        except Exception as e:
+            logger.warning(
+                "refresh_equity failed (check BINANCE_API_KEY, BINANCE_API_SECRET, BINANCE_TESTNET): %s",
+                e,
+            )
 
     def _get_status(self) -> dict[str, Any]:
         """Build status dict for API/WebSocket."""
