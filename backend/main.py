@@ -3,9 +3,13 @@ BFAT unified deployment entrypoint.
 FastAPI app with API routes and WebSocket.
 """
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config.settings import Settings
@@ -36,6 +40,10 @@ async def lifespan(app: FastAPI):
         testnet=settings.binance_testnet,
     )
     app.state.binance_account_client = binance_account
+    if binance_account.is_configured():
+        logger.info("Binance account client configured (testnet=%s)", settings.binance_testnet)
+    else:
+        logger.warning("Binance API keys not set - equity/futures APIs will return 503")
 
     engine_service = EngineService(settings, db, binance_account)
     app.state.engine_service = engine_service

@@ -88,12 +88,36 @@ export function Dashboard() {
   useEffect(() => {
     if (!accessToken) return
     let cancelled = false
+    function extractEquity(d: unknown): number | null {
+      if (d && typeof d === 'object' && 'equity' in d && typeof (d as { equity: unknown }).equity === 'number') {
+        const eq = (d as { equity: number }).equity
+        return eq > 0 ? eq : null
+      }
+      if (d && typeof d === 'object' && ('totalMarginBalance' in d || 'totalWalletBalance' in d)) {
+        const obj = d as Record<string, unknown>
+        for (const k of ['totalMarginBalance', 'totalWalletBalance']) {
+          const v = obj[k]
+          if (v != null) {
+            const f = typeof v === 'number' ? v : parseFloat(String(v))
+            if (!isNaN(f) && f > 0) return f
+          }
+        }
+      }
+      return null
+    }
     async function fetchEquity() {
       const res = await apiFetch('/api/equity', { token: accessToken })
       if (cancelled || !res.ok) return
       try {
         const d = await res.json()
-        const eq = typeof d?.equity === 'number' ? d.equity : null
+        let eq = extractEquity(d)
+        if (eq == null || eq <= 0) {
+          const accRes = await apiFetch('/api/account/account', { token: accessToken })
+          if (!cancelled && accRes.ok) {
+            const acc = await accRes.json()
+            eq = extractEquity(acc)
+          }
+        }
         if (eq != null && eq > 0) setEquityFallback(eq)
       } catch {
         // ignore
