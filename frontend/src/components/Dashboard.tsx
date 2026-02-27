@@ -29,6 +29,7 @@ type TabId = 'dashboard' | 'insight' | 'logs' | 'chart'
 export function Dashboard() {
   const { accessToken, logout, username } = useAuth()
   const [status, setStatus] = useState<StatusData | null>(null)
+  const [equityFallback, setEquityFallback] = useState<number | null>(null)
   const [activeTab, setActiveTab] = useState<TabId>('dashboard')
   const [userOpen, setUserOpen] = useState(false)
   const [regime, setRegime] = useState<string | null>(null)
@@ -78,6 +79,28 @@ export function Dashboard() {
     }
     fetch_()
     const interval = setInterval(fetch_, 30000)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [accessToken])
+
+  useEffect(() => {
+    if (!accessToken) return
+    let cancelled = false
+    async function fetchEquity() {
+      const res = await apiFetch('/api/equity', { token: accessToken })
+      if (cancelled || !res.ok) return
+      try {
+        const d = await res.json()
+        const eq = typeof d?.equity === 'number' ? d.equity : null
+        if (eq != null && eq > 0) setEquityFallback(eq)
+      } catch {
+        // ignore
+      }
+    }
+    fetchEquity()
+    const interval = setInterval(fetchEquity, 5000)
     return () => {
       cancelled = true
       clearInterval(interval)
@@ -163,6 +186,13 @@ export function Dashboard() {
       ? 'bg-amber-500/20 text-amber-400'
       : 'bg-[var(--positive)]/20 text-[var(--positive)]'
 
+  const displayEquity =
+    (status?.equity != null && status.equity > 0)
+      ? status.equity
+      : (equityFallback != null && equityFallback > 0)
+        ? equityFallback
+        : null
+
   return (
     <div className="min-h-screen bg-[#0a0e12] text-[var(--text)]">
       <header className="sticky top-0 z-10 border-b border-[var(--border)] bg-[var(--bg-card)]/95 backdrop-blur px-4 py-3 md:px-6 shadow-[var(--shadow)]">
@@ -199,7 +229,7 @@ export function Dashboard() {
             </span>
             <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] px-4 py-2">
               <span className="text-xs text-[var(--text-muted)]">Equity</span>
-              <p className="font-medium">{status?.equity != null ? status.equity.toFixed(2) : '–'} USDT</p>
+              <p className="font-medium">{displayEquity != null ? displayEquity.toFixed(2) : '–'} USDT</p>
             </div>
             {status?.kill_switch_triggered && (
               <div className="rounded-xl bg-[var(--negative)]/20 px-4 py-2 text-[var(--negative)] font-semibold">
@@ -283,7 +313,7 @@ export function Dashboard() {
               <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-[var(--text-muted)]">
                 Equity
               </h3>
-              <p className="text-2xl font-semibold">{status?.equity != null ? status.equity.toFixed(2) : '–'} USDT</p>
+              <p className="text-2xl font-semibold">{displayEquity != null ? displayEquity.toFixed(2) : '–'} USDT</p>
             </div>
             <div className="lg:col-span-2">
               <PositionCard

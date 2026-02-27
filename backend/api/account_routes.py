@@ -6,6 +6,20 @@ from api.deps import get_current_user
 router = APIRouter(prefix="/api", tags=["account"])
 
 
+@router.get("/equity")
+async def get_equity(
+    request: Request,
+    _: str = Depends(get_current_user),
+):
+    """Return equity. Forces refresh if cache is 0. Use as fallback when WebSocket shows 0."""
+    svc = request.app.state.engine_service
+    if svc is None:
+        return {"equity": 0.0}
+    if svc._equity_cache <= 0:
+        svc.refresh_equity()
+    return {"equity": svc._equity_cache}
+
+
 @router.get("/account/balance")
 async def get_balance(
     request: Request,
