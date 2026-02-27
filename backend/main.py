@@ -29,7 +29,23 @@ async def lifespan(app: FastAPI):
     app.state.db = db
     engine_service = EngineService(settings, db)
     app.state.engine_service = engine_service
+
+    async def _equity_refresh_loop() -> None:
+        """Refresh equity every 10s when engine stopped, so Dashboard stays updated."""
+        while True:
+            await asyncio.sleep(10)
+            if not engine_service._running:  # Engine stream handles refresh when running
+                engine_service.refresh_equity()
+
+    _equity_task = asyncio.create_task(_equity_refresh_loop())
+    engine_service.refresh_equity()
+
     yield
+    _equity_task.cancel()
+    try:
+        await _equity_task
+    except asyncio.CancelledError:
+        pass
     await engine_service.stop()
     db.close()
 

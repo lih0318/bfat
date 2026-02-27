@@ -80,6 +80,13 @@ class EngineService:
             self._equity_cache = eq
         return self._equity_cache if self._equity_cache > 0 else 0.0
 
+    def refresh_equity(self) -> None:
+        """Refresh equity cache from Binance. Call when engine stopped to keep Dashboard updated."""
+        try:
+            self._equity_provider()
+        except Exception:
+            pass
+
     def _get_status(self) -> dict[str, Any]:
         """Build status dict for API/WebSocket."""
         if self._engine is None:
@@ -278,7 +285,7 @@ class EngineService:
         details = getattr(strategy, "get_last_evaluation_details", lambda: {})()
         if not details:
             return default
-        return {
+        result = {
             "regime": details.get("regime", "Unknown"),
             "volatility_score": details.get("volatility_score", 0.0),
             "bb_width_percentile": details.get("bb_width_percentile", 0.0),
@@ -286,3 +293,8 @@ class EngineService:
             "volume_ratio": details.get("volume_ratio", 0.0),
             "engine_reasoning": details.get("engine_reasoning", []),
         }
+        if "bb_width_z" in details:
+            result["bb_width_z"] = details["bb_width_z"]
+        if "compression_model" in details:
+            result["compression_model"] = details["compression_model"]
+        return result

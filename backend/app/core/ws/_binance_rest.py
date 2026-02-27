@@ -57,7 +57,11 @@ def keepalive_listen_key(
 def fetch_account_equity(
     api_key: str, api_secret: str, base_url: str
 ) -> float:
-    """GET /fapi/v2/account. Returns totalWalletBalance as float."""
+    """
+    GET /fapi/v2/account.
+    Returns totalMarginBalance (wallet + unrealized PnL) as float.
+    Falls back to totalWalletBalance if totalMarginBalance missing.
+    """
     params = {"timestamp": int(time.time() * 1000), "recvWindow": 5000}
     signed = _sign(api_secret, params)
     url = f"{base_url}/fapi/v2/account?{signed}"
@@ -66,7 +70,7 @@ def fetch_account_equity(
     if resp.status_code != 200:
         raise RuntimeError(f"account fetch failed: {resp.status_code} {resp.text}")
     data = resp.json()
-    bal = data.get("totalWalletBalance", "0")
+    bal = data.get("totalMarginBalance") or data.get("totalWalletBalance", "0")
     try:
         return float(bal)
     except (TypeError, ValueError):
