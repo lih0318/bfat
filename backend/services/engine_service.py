@@ -70,7 +70,6 @@ class EngineService:
         self._engine: Optional[BFATEngine] = None
         self._market_stream: Optional[BinanceMarketStream] = None
         self._user_stream: Optional[BinanceUserStream] = None
-        self._equity_cache: float = 0.0
         self._critical_error: Optional[str] = None
 
     def _build_engine(self) -> BFATEngine:
@@ -104,30 +103,22 @@ class EngineService:
         )
 
     def _equity_provider(self) -> float:
-        """Fetch equity from Binance via SDK. Handles v2/v3 response + assets fallback."""
+        """Fetch current equity from Binance (no cache). Returns 0.0 if not configured or on error."""
         if not self._binance_account.is_configured():
-            logger.warning("Equity skipped: BINANCE_API_KEY/SECRET not set. Real funds need BINANCE_TESTNET=false.")
-            return self._equity_cache if self._equity_cache > 0 else 0.0
+            return 0.0
         try:
             acct = self._binance_account.account()
             total = _extract_equity_from_account(acct)
-            self._equity_cache = total
             if total > 0:
                 logger.info("Equity: %.2f USDT", total)
-            return self._equity_cache
+            return total
         except Exception as e:
             logger.warning("Equity fetch failed: %s", e)
-            return self._equity_cache if self._equity_cache > 0 else 0.0
-
-    def refresh_equity(self) -> None:
-        """Refresh equity cache from Binance. Call when engine stopped to keep Dashboard updated."""
-        try:
-            self._equity_provider()
-        except Exception as e:
-            logger.warning("refresh_equity failed: %s", e)
+            return 0.0
 
     def _get_status(self) -> dict[str, Any]:
-        """Build status dict for API/WebSocket."""
+        """Build status dict for API/WebSocket. Fetches equity from Binance each time."""
+        equity = self._equity_provider()
         if self._engine is None:
             return {
                 "engine_state": "stopped",
@@ -137,7 +128,7 @@ class EngineService:
                 "r_multiple": None,
                 "r_validation_status": None,
                 "system_health": "HEALTHY",
-                "equity": self._equity_cache,
+                "equity": equity,
                 "kill_switch_triggered": False,
                 "error": self._critical_error,
             }
@@ -184,7 +175,7 @@ class EngineService:
             "r_multiple": r_multiple,
             "r_validation_status": r_validation_status,
             "system_health": system_health,
-            "equity": self._equity_cache,
+            "equity": equity,
             "kill_switch_triggered": kill.is_triggered(),
             "error": self._critical_error,
         }
@@ -195,12 +186,6 @@ class EngineService:
         _, _, system_log_repo = create_persistence(self._db)
         try:
             self._engine = self._build_engine()
-            try:
-                eq = self._equity_provider()
-                if eq > 0:
-                    self._equity_cache = eq
-            except Exception:
-                pass
             market = BinanceMarketStream(
                 symbol=self._settings.bfat_symbol,
                 engine=self._engine,

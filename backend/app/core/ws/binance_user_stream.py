@@ -15,7 +15,6 @@ BINANCE_WS_TESTNET = "wss://stream.binancefuture.com/ws"
 BINANCE_REST_MAINNET = "https://fapi.binance.com"
 BINANCE_REST_TESTNET = "https://testnet.binancefuture.com"
 KEEPALIVE_INTERVAL_SEC = 30 * 60
-EQUITY_REFRESH_INTERVAL_SEC = 10
 
 
 def _parse_order_trade_update(msg: dict) -> tuple[float, bool] | None:
@@ -64,22 +63,8 @@ class BinanceUserStream:
         self._running = False
         self._ws: Any = None
         self._listen_key: str | None = None
-        self._equity_cache: float = 0.0
         self._keepalive_task: asyncio.Task | None = None
-        self._equity_refresh_task: asyncio.Task | None = None
         self._run_task: asyncio.Task | None = None
-
-    async def _equity_refresh_loop(self) -> None:
-        """Refresh equity every 10 seconds. Never reset to 0 on failure."""
-        while self._running:
-            await asyncio.sleep(EQUITY_REFRESH_INTERVAL_SEC)
-            if not self._running:
-                break
-            try:
-                val = self._equity_provider()
-                self._equity_cache = val
-            except Exception:
-                pass
 
     async def _keepalive_loop(self) -> None:
         """PUT listenKey every 30 minutes. Uses current _listen_key session."""
@@ -134,13 +119,10 @@ class BinanceUserStream:
                             result = _parse_order_trade_update(msg)
                             if result:
                                 exit_price, _ = result
-                                equity = self._equity_cache
-                                if equity <= 0:
-                                    try:
-                                        self._equity_cache = self._equity_provider()
-                                        equity = self._equity_cache
-                                    except Exception:
-                                        continue
+                                try:
+                                    equity = self._equity_provider()
+                                except Exception:
+                                    continue
                                 if equity <= 0:
                                     continue
                                 try:
@@ -173,25 +155,12 @@ class BinanceUserStream:
     async def start(self) -> None:
         """Start user stream and keepalive."""
         self._running = True
-        try:
-            val = self._equity_provider()
-            self._equity_cache = val
-        except Exception:
-            pass
-        self._equity_refresh_task = asyncio.create_task(self._equity_refresh_loop())
         self._keepalive_task = asyncio.create_task(self._keepalive_loop())
         self._run_task = asyncio.create_task(self._run_loop())
 
     async def stop(self) -> None:
         """Stop the stream. Cancel tasks, close ws."""
         self._running = False
-        if self._equity_refresh_task:
-            self._equity_refresh_task.cancel()
-            try:
-                await self._equity_refresh_task
-            except asyncio.CancelledError:
-                pass
-            self._equity_refresh_task = None
         if self._keepalive_task:
             self._keepalive_task.cancel()
             try:

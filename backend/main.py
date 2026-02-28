@@ -55,28 +55,7 @@ async def lifespan(app: FastAPI):
     engine_service = EngineService(settings, db, binance_account)
     app.state.engine_service = engine_service
 
-    async def _equity_refresh_loop() -> None:
-        """Refresh equity when engine stopped. Every 2s if cache is 0, else every 10s."""
-        while True:
-            if not engine_service._running:
-                await asyncio.get_running_loop().run_in_executor(
-                    None, engine_service.refresh_equity
-                )
-            interval = 2.0 if engine_service._equity_cache <= 0 else 10.0
-            await asyncio.sleep(interval)
-
-    _equity_task = asyncio.create_task(_equity_refresh_loop())
-    try:
-        engine_service.refresh_equity()
-    except Exception:
-        pass
-
     yield
-    _equity_task.cancel()
-    try:
-        await _equity_task
-    except asyncio.CancelledError:
-        pass
     await engine_service.stop()
     db.close()
 

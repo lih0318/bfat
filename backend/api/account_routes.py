@@ -46,38 +46,25 @@ async def get_equity(
     request: Request,
     _: str = Depends(get_current_user),
 ):
-    """Return equity. When Binance is configured, always fetch fresh from API first; otherwise use cache."""
-    svc = getattr(request.app.state, "engine_service", None)
+    """Return current equity from Binance (no cache)."""
     bac = getattr(request.app.state, "binance_account_client", None)
-
-    # Prefer direct Binance fetch when configured so equity is never stale
     if bac is not None and bac.is_configured():
         try:
             acct = bac.account()
             eq = _extract_equity(acct)
             if eq > 0:
                 logger.info("Equity from /api/equity: %.2f USDT", eq)
-            if svc is not None:
-                svc._equity_cache = eq
             return {"equity": eq}
         except Exception as e:
             logger.warning("Equity fetch from Binance failed: %s", e)
-            # Fall through to cache
-
-    # Use engine_service cache (updated by refresh_equity or previous fetch)
-    if svc is not None:
-        cache = getattr(svc, "_equity_cache", 0.0)
-        if cache > 0:
-            return {"equity": cache}
-        if hasattr(svc, "refresh_equity"):
-            try:
-                svc.refresh_equity()
-                cache = getattr(svc, "_equity_cache", 0.0)
-                if cache > 0:
-                    return {"equity": cache}
-            except Exception as e:
-                logger.warning("Equity refresh failed: %s", e)
-    return {"equity": getattr(svc, "_equity_cache", 0.0) if svc else 0.0}
+    svc = getattr(request.app.state, "engine_service", None)
+    if svc is not None and hasattr(svc, "_equity_provider"):
+        try:
+            eq = svc._equity_provider()
+            return {"equity": eq}
+        except Exception:
+            pass
+    return {"equity": 0.0}
 
 
 @router.get("/account/balance")

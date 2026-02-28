@@ -16,7 +16,6 @@ BINANCE_REST_MAINNET = "https://fapi.binance.com"
 BINANCE_REST_TESTNET = "https://testnet.binancefuture.com"
 BINANCE_WS_TESTNET = "wss://stream.binancefuture.com/ws"
 MAX_CANDLE_BUFFER = 500
-EQUITY_REFRESH_INTERVAL_SEC = 10
 
 
 def _parse_closed_candle(msg: dict) -> dict | None:
@@ -60,8 +59,6 @@ class BinanceMarketStream:
         self._candles: deque[dict] = deque(maxlen=MAX_CANDLE_BUFFER)
         self._running = False
         self._ws: Any = None
-        self._equity_cache: float = 0.0
-        self._equity_refresh_task: asyncio.Task | None = None
         self._run_task: asyncio.Task | None = None
 
     @property
@@ -91,18 +88,6 @@ class BinanceMarketStream:
                 "timestamp": str(bar[6]),
             })
 
-    async def _equity_refresh_loop(self) -> None:
-        """Refresh equity every 10 seconds. Never reset to 0 on failure."""
-        while self._running:
-            await asyncio.sleep(EQUITY_REFRESH_INTERVAL_SEC)
-            if not self._running:
-                break
-            try:
-                val = self._equity_provider()
-                self._equity_cache = val
-            except Exception:
-                pass
-
     async def _run_loop(self) -> None:
         """Connect and process messages. Reconnect on disconnect."""
         url = f"{self._ws_base}/{self._symbol}@kline_15m"
@@ -126,13 +111,10 @@ class BinanceMarketStream:
                             if candle:
                                 self._candles.append(candle)
                                 candles_list = list(self._candles)
-                                equity = self._equity_cache
-                                if equity <= 0:
-                                    try:
-                                        self._equity_cache = self._equity_provider()
-                                        equity = self._equity_cache
-                                    except Exception:
-                                        pass
+                                try:
+                                    equity = self._equity_provider()
+                                except Exception:
+                                    equity = 0.0
                                 if equity <= 0:
                                     try:
                                         self._engine.evaluate_for_insight(candles_list)
@@ -169,24 +151,11 @@ class BinanceMarketStream:
         """Start the stream. Fetches initial klines, then connects to WebSocket."""
         self._running = True
         self._fetch_initial_klines()
-        try:
-            val = self._equity_provider()
-            self._equity_cache = val
-        except Exception:
-            pass
-        self._equity_refresh_task = asyncio.create_task(self._equity_refresh_loop())
         self._run_task = asyncio.create_task(self._run_loop())
 
     async def stop(self) -> None:
         """Stop the stream. Cancel tasks, close ws."""
         self._running = False
-        if self._equity_refresh_task:
-            self._equity_refresh_task.cancel()
-            try:
-                await self._equity_refresh_task
-            except asyncio.CancelledError:
-                pass
-            self._equity_refresh_task = None
         if self._run_task:
             self._run_task.cancel()
             try:
