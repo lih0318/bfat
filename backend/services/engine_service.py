@@ -24,21 +24,26 @@ BINANCE_REST_TESTNET = "https://testnet.binancefuture.com"
 
 
 def _extract_equity_from_account(acct: dict) -> float:
-    """Extract equity from Binance account response (v2/v3)."""
-    val = acct.get("totalMarginBalance") or acct.get("totalWalletBalance")
-    if val is not None:
-        try:
-            f = float(val)
-            if f > 0:
-                return f
-        except (TypeError, ValueError):
-            pass
-    assets = acct.get("assets") or []
-    for a in assets:
+    """Extract equity from Binance account response. Handles camelCase, snake_case, string values."""
+    for k in (
+        "totalMarginBalance",
+        "totalWalletBalance",
+        "total_margin_balance",
+        "total_wallet_balance",
+    ):
+        val = acct.get(k)
+        if val is not None and val != "":
+            try:
+                f = float(val)
+                if f > 0:
+                    return f
+            except (TypeError, ValueError):
+                pass
+    for a in acct.get("assets") or []:
         if str(a.get("asset", "")).upper() == "USDT":
-            for k in ("marginBalance", "walletBalance", "crossWalletBalance"):
+            for k in ("marginBalance", "walletBalance", "crossWalletBalance", "margin_balance", "wallet_balance"):
                 v = a.get(k)
-                if v is not None:
+                if v is not None and v != "":
                     try:
                         f = float(v)
                         if f > 0:

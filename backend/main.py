@@ -12,7 +12,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.config.settings import Settings
+from app.config.settings import Settings, _ENV_PATH
 from app.core.database import DatabaseFactory
 
 from api.account_routes import router as account_router
@@ -30,6 +30,13 @@ async def lifespan(app: FastAPI):
     """Create DB, init tables, create engine service. Close on shutdown."""
     settings = Settings()
     app.state.settings = settings
+    # Log env loading for debugging equity/API key issues
+    logger.info("Settings env_file: %s (exists=%s)", _ENV_PATH, _ENV_PATH.exists())
+    if not (settings.binance_api_key and settings.binance_api_secret):
+        logger.warning(
+            "BINANCE_API_KEY or BINANCE_API_SECRET empty. Set them in %s or in environment for equity/orders.",
+            _ENV_PATH,
+        )
     db = DatabaseFactory(settings)
     db.init_tables()
     app.state.db = db

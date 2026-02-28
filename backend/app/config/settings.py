@@ -4,10 +4,22 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# .env: try backend/.env, then project_root/.env (parent of backend)
+# .env: try backend/.env, project_root/.env, then cwd/.env (so any run directory works)
 _backend_dir = Path(__file__).resolve().parent.parent.parent
 _project_root = _backend_dir.parent
-_ENV_PATH = _backend_dir / ".env" if (_backend_dir / ".env").exists() else _project_root / ".env"
+_cwd = Path.cwd()
+_env_candidates = [
+    _backend_dir / ".env",
+    _project_root / ".env",
+    _cwd / ".env",
+]
+_ENV_PATH = None
+for p in _env_candidates:
+    if p.exists():
+        _ENV_PATH = p
+        break
+if _ENV_PATH is None:
+    _ENV_PATH = _backend_dir / ".env"  # default path for pydantic; may not exist
 
 
 class Settings(BaseSettings):

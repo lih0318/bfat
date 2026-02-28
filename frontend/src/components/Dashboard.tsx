@@ -251,9 +251,12 @@ export function Dashboard() {
             >
               {status?.system_health === 'DEGRADED' ? 'DEGRADED' : 'HEALTHY'}
             </span>
-            <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] px-4 py-2">
+            <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] px-4 py-2" title={displayEquity == null ? '잔고를 불러오지 못했습니다. backend/.env에 BINANCE_API_KEY, BINANCE_API_SECRET를 설정하세요.' : undefined}>
               <span className="text-xs text-[var(--text-muted)]">Equity</span>
               <p className="font-medium">{displayEquity != null ? displayEquity.toFixed(2) : '–'} USDT</p>
+              {displayEquity == null && (
+                <p className="text-[10px] text-[var(--text-muted)] mt-0.5">API 키 확인 필요</p>
+              )}
             </div>
             {status?.kill_switch_triggered && (
               <div className="rounded-xl bg-[var(--negative)]/20 px-4 py-2 text-[var(--negative)] font-semibold">
@@ -338,6 +341,9 @@ export function Dashboard() {
                 Equity
               </h3>
               <p className="text-2xl font-semibold">{displayEquity != null ? displayEquity.toFixed(2) : '–'} USDT</p>
+              {displayEquity == null && (
+                <p className="mt-2 text-xs text-[var(--text-muted)]">backend/.env에 BINANCE_API_KEY, BINANCE_API_SECRET 설정 후 서버 재시작</p>
+              )}
             </div>
             <div className="lg:col-span-2">
               <PositionCard
