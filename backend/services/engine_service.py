@@ -111,10 +111,10 @@ class EngineService:
         try:
             acct = self._binance_account.account()
             total = _extract_equity_from_account(acct)
+            self._equity_cache = total
             if total > 0:
-                self._equity_cache = total
                 logger.info("Equity: %.2f USDT", total)
-            return self._equity_cache if self._equity_cache > 0 else 0.0
+            return self._equity_cache
         except Exception as e:
             logger.warning("Equity fetch failed: %s", e)
             return self._equity_cache if self._equity_cache > 0 else 0.0

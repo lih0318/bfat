@@ -57,7 +57,7 @@ async def get_equity(
             eq = _extract_equity(acct)
             if eq > 0:
                 logger.info("Equity from /api/equity: %.2f USDT", eq)
-            if svc is not None and eq > 0:
+            if svc is not None:
                 svc._equity_cache = eq
             return {"equity": eq}
         except Exception as e:

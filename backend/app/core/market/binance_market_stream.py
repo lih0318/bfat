@@ -99,8 +99,7 @@ class BinanceMarketStream:
                 break
             try:
                 val = self._equity_provider()
-                if val > 0:
-                    self._equity_cache = val
+                self._equity_cache = val
             except Exception:
                 pass
 
@@ -172,8 +171,7 @@ class BinanceMarketStream:
         self._fetch_initial_klines()
         try:
             val = self._equity_provider()
-            if val > 0:
-                self._equity_cache = val
+            self._equity_cache = val
         except Exception:
             pass
         self._equity_refresh_task = asyncio.create_task(self._equity_refresh_loop())
