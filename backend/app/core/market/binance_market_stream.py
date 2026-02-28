@@ -148,9 +148,16 @@ class BinanceMarketStream:
                 await asyncio.sleep(delay)
 
     async def start(self) -> None:
-        """Start the stream. Fetches initial klines, then connects to WebSocket."""
+        """Start the stream. Fetches initial klines, seeds Insight from past bars, then connects to WebSocket."""
         self._running = True
         self._fetch_initial_klines()
+        # Seed Insight from past data so Insight tab shows immediately (entry-precedent bars)
+        try:
+            initial_candles = list(self._candles)
+            if initial_candles:
+                self._engine.evaluate_for_insight(initial_candles)
+        except Exception:
+            pass
         self._run_task = asyncio.create_task(self._run_loop())
 
     async def stop(self) -> None:
