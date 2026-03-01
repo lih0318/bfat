@@ -181,6 +181,10 @@ class BreakoutStrategy:
     def evaluate(self, candles: list[dict]) -> Optional[Signal]:
         """
         Evaluate closed candles. Returns Signal(LONG/SHORT) or None.
+
+        All conditions are evaluated on the SAME candle index (the last closed bar).
+        Lookback windows for breakout high/low, BB width, and volume use strictly
+        past-only data (shift(1) equivalent — current candle excluded from the window).
         """
         required_keys = ("open", "high", "low", "close", "volume")
         if not candles or not all(
@@ -194,26 +198,32 @@ class BreakoutStrategy:
             self.BB_WIDTH_ZSCORE_PERIOD,
             self.ATR_PERIOD + 1,
             self.BREAKOUT_LOOKBACK + 1,
-            self.VOLUME_LOOKBACK,
+            self.VOLUME_LOOKBACK + 1,
         )
         if len(candles) < minimum_required:
             return None
-        closes = [c["close"] for c in candles]
-        timestamps = [c.get("timestamp", "") for c in candles]
 
+        # ── Current candle (the evaluation target) ──
+        cur = candles[-1]
+        close = cur["close"]
+        close_price = close
+        signal_time = cur.get("timestamp", "")
+
+        # ── 1. Compression (BB width Z-score + percentile) ──
+        # All computed on candles up to and including current.
+        # BB width Z-score uses past-only window internally (no lookahead).
+        closes = [c["close"] for c in candles]
         middle, upper, lower = _bollinger_bands(closes, self.BB_PERIOD, self.BB_NUM_STD)
         band_widths = [
             (u - l) / m if m and m > 0 else 0.0
             for u, l, m in zip(upper, lower, middle)
         ]
-        # Compression: use width of candle before signal (pre-breakout state)
-        comp_widths = band_widths[:-1] if len(band_widths) >= 2 else band_widths
-        if len(comp_widths) < self.LOOKBACK:
+        if len(band_widths) < self.LOOKBACK:
             return None
-        bb_width_z = _compute_bb_width_zscore(comp_widths, self.BB_WIDTH_ZSCORE_PERIOD)
-        current_z = bb_width_z[-1]
-        bb_width_pct = _bb_width_percentile(comp_widths, self.LOOKBACK)
-        close_price = candles[-1]["close"]
+        width_zscores = _compute_bb_width_zscore(band_widths, self.BB_WIDTH_ZSCORE_PERIOD)
+        current_z = width_zscores[-1]
+        bb_width_pct = _bb_width_percentile(band_widths, self.LOOKBACK)
+
         compression = (
             current_z < -0.8
             and bb_width_pct is not None
@@ -222,127 +232,95 @@ class BreakoutStrategy:
         if not compression:
             self._store_evaluation(
                 bb_width_pct, 0.0, 0.0, "Ranging",
-                [
-                    f"BB width Z-score {current_z:.2f} (need < -0.8) or percentile >= 60 → no compression",
-                ],
-                close_price,
-                bb_width_z=current_z,
-                compression_model="Z_SCORE_HYBRID",
+                [f"BB width Z-score {current_z:.2f} (need < -0.8) or percentile >= 60 → no compression"],
+                close_price, bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
             )
             return None
 
+        # ── 2. ATR + overextension (same candle index) ──
         atr_vals = _atr(candles, self.ATR_PERIOD)
         if len(atr_vals) != len(candles):
             return None
         current_atr = atr_vals[-1]
         if current_atr <= 0:
             self._store_evaluation(
-                bb_width_pct, 0.0, 0.0, "Ranging", ["ATR invalid"], close_price,
-                bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
+                bb_width_pct, 0.0, 0.0, "Ranging", ["ATR invalid"],
+                close_price, bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
             )
             return None
         movement = _last_n_candles_movement(candles, self.OVEREXTENSION_LOOKBACK)
-        overext_threshold = (
-            self.ATR_OVEREXTENSION * current_atr * self.OVEREXTENSION_LOOKBACK
-        )
-        current_vol = candles[-1]["volume"]
+        overext_threshold = self.ATR_OVEREXTENSION * current_atr * self.OVEREXTENSION_LOOKBACK
+        overextended = movement >= overext_threshold
+
+        # ── 3. Volume Z-score (current candle volume, past-only mean/std) ──
+        current_vol = cur["volume"]
         avg_vol = _average_volume(candles, self.VOLUME_LOOKBACK)
         volume_ratio = current_vol / avg_vol if avg_vol and avg_vol > 0 else 0.0
         vol_z = _volume_zscore(candles, self.VOLUME_LOOKBACK)
 
-        if movement >= overext_threshold:
+        # ── 4. Breakout: close > previous 20-bar high (shift(1), current candle excluded) ──
+        prev_bars = candles[-(self.BREAKOUT_LOOKBACK + 1) : -1]
+        high_20 = max(c["high"] for c in prev_bars)
+        low_20 = min(c["low"] for c in prev_bars)
+        breakout_long = close > high_20 * (1 + self.BREAKOUT_THRESHOLD)
+        breakout_short = close < low_20 * (1 - self.BREAKOUT_THRESHOLD)
+
+        # ── 5. Single boolean entry mask ──
+        vol_z_safe = vol_z if vol_z is not None else float("-inf")
+        long_signal = (
+            breakout_long
+            and not overextended
+            and vol_z is not None
+            and vol_z_safe >= self.VOLUME_ZSCORE_LONG_THRESHOLD
+        )
+        short_signal = (
+            breakout_short
+            and not overextended
+            and vol_z is not None
+            and vol_z_safe >= self.VOLUME_ZSCORE_SHORT_THRESHOLD
+        )
+
+        # ── Insight reasoning ──
+        reasoning: list[str] = [f"BB width Z-score {current_z:.2f} → compression"]
+        vol_z_str = f"{vol_z:.2f}" if vol_z is not None else "N/A"
+
+        if overextended:
+            reasoning.append(f"Movement {movement:.2f} >= overextension {overext_threshold:.2f} → filtered")
             self._store_evaluation(
-                bb_width_pct, current_atr, volume_ratio, "High Volatility", [
-                    f"BB width Z-score {current_z:.2f} → compression",
-                    f"Movement {movement:.2f} >= overextension threshold {overext_threshold:.2f} → filtered",
-                ], close_price,
-                bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
+                bb_width_pct, current_atr, volume_ratio, "High Volatility", reasoning,
+                close_price, bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
             )
             return None
 
-        prev_20 = candles[-(self.BREAKOUT_LOOKBACK + 1) : -1]
-        high_20 = max(c["high"] for c in prev_20)
-        low_20 = min(c["low"] for c in prev_20)
-        close = candles[-1]["close"]
-        signal_time = timestamps[-1] if timestamps else ""
-        signal_candle_ts = signal_time
-
-        breakout_long = close >= high_20 * (1 + self.BREAKOUT_THRESHOLD)
-        breakout_short = close <= low_20 * (1 - self.BREAKOUT_THRESHOLD)
-
-        if not breakout_long and not breakout_short:
+        if long_signal:
+            reasoning.append(f"Breakout confirmed above 20-bar high with volume Z-score: {vol_z_str}")
             self._store_evaluation(
-                bb_width_pct, current_atr, volume_ratio, "Ranging", [
-                    f"BB width Z-score {current_z:.2f} → compression",
-                    f"Volume Z-score {vol_z:.2f}" if vol_z is not None else "Volume Z-score N/A",
-                    "No breakout above high or below low",
-                ], close_price,
-                bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
+                bb_width_pct, current_atr, volume_ratio, "Trending", reasoning,
+                close_price, bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
             )
-            return None
+            return Signal(symbol=self._symbol, side=Side.LONG, signal_time=signal_time, signal_candle_ts=signal_time)
 
-        if breakout_long:
-            if vol_z is None:
-                self._store_evaluation(
-                    bb_width_pct, current_atr, volume_ratio, "Ranging", [
-                        f"BB width Z-score {current_z:.2f} → compression",
-                        "Breakout above high detected but volume std is zero — cannot validate liquidity",
-                    ], close_price,
-                    bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
-                )
-                return None
-            if vol_z < self.VOLUME_ZSCORE_LONG_THRESHOLD:
-                self._store_evaluation(
-                    bb_width_pct, current_atr, volume_ratio, "Ranging", [
-                        f"BB width Z-score {current_z:.2f} → compression",
-                        f"Breakout above high detected but volume Z-score too low for LONG: {vol_z:.2f} (need >= {self.VOLUME_ZSCORE_LONG_THRESHOLD})",
-                    ], close_price,
-                    bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
-                )
-                return None
+        if short_signal:
+            reasoning.append(f"Breakout confirmed below 20-bar low with volume Z-score: {vol_z_str}")
             self._store_evaluation(
-                bb_width_pct, current_atr, volume_ratio, "Trending", [
-                    f"BB width Z-score {current_z:.2f} → compression",
-                    f"Breakout confirmed above 20-bar high with volume Z-score: {vol_z:.2f}",
-                ], close_price,
-                bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
+                bb_width_pct, current_atr, volume_ratio, "Trending", reasoning,
+                close_price, bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
             )
-            return Signal(
-                symbol=self._symbol,
-                side=Side.LONG,
-                signal_time=signal_time,
-                signal_candle_ts=signal_candle_ts,
-            )
+            return Signal(symbol=self._symbol, side=Side.SHORT, signal_time=signal_time, signal_candle_ts=signal_time)
 
-        # breakout_short
-        if vol_z is None:
-            self._store_evaluation(
-                bb_width_pct, current_atr, volume_ratio, "Ranging", [
-                    f"BB width Z-score {current_z:.2f} → compression",
-                    "Breakout below low detected but volume std is zero — cannot validate liquidity",
-                ], close_price,
-                bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
-            )
-            return None
-        if vol_z < self.VOLUME_ZSCORE_SHORT_THRESHOLD:
-            self._store_evaluation(
-                bb_width_pct, current_atr, volume_ratio, "Ranging", [
-                    f"BB width Z-score {current_z:.2f} → compression",
-                    f"Breakout below low detected but volume Z-score too low for SHORT: {vol_z:.2f} (need >= {self.VOLUME_ZSCORE_SHORT_THRESHOLD})",
-                ], close_price,
-                bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
-            )
-            return None
+        # ── No entry: explain why ──
+        if breakout_long and vol_z is not None and vol_z_safe < self.VOLUME_ZSCORE_LONG_THRESHOLD:
+            reasoning.append(f"Breakout above high detected but volume Z-score too low for LONG: {vol_z_str} (need >= {self.VOLUME_ZSCORE_LONG_THRESHOLD})")
+        elif breakout_short and vol_z is not None and vol_z_safe < self.VOLUME_ZSCORE_SHORT_THRESHOLD:
+            reasoning.append(f"Breakout below low detected but volume Z-score too low for SHORT: {vol_z_str} (need >= {self.VOLUME_ZSCORE_SHORT_THRESHOLD})")
+        elif (breakout_long or breakout_short) and vol_z is None:
+            reasoning.append("Breakout detected but volume std is zero — cannot validate liquidity")
+        else:
+            reasoning.append(f"Volume Z-score {vol_z_str}")
+            reasoning.append("No breakout above high or below low")
+
         self._store_evaluation(
-            bb_width_pct, current_atr, volume_ratio, "Trending", [
-                f"BB width Z-score {current_z:.2f} → compression",
-                f"Breakout confirmed below 20-bar low with volume Z-score: {vol_z:.2f}",
-            ], close_price,
-            bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
+            bb_width_pct, current_atr, volume_ratio, "Ranging", reasoning,
+            close_price, bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
         )
-        return Signal(
-            symbol=self._symbol,
-            side=Side.SHORT,
-            signal_time=signal_time,
-            signal_candle_ts=signal_candle_ts,
-        )
+        return None
