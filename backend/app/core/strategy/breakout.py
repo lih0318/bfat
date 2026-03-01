@@ -123,7 +123,7 @@ class BreakoutStrategy:
     BREAKOUT_LOOKBACK = 20
     BREAKOUT_THRESHOLD = 0.001
     VOLUME_LOOKBACK = 20
-    VOLUME_MULTIPLIER = 1.5
+    VOLUME_MULTIPLIER = 0.05  # min volume = 5% of avg (was 1.5; low vol still allows entry when compression+breakout)
     OVEREXTENSION_LOOKBACK = 10
     ATR_PERIOD = 14
     ATR_OVEREXTENSION = 2.5
