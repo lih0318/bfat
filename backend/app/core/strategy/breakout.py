@@ -103,6 +103,20 @@ def _average_volume(candles: list[dict], period: int = 20) -> Optional[float]:
     return sum(vols) / period
 
 
+def _volume_zscore(candles: list[dict], period: int = 20) -> Optional[float]:
+    """Z-score of current candle volume vs rolling window. Returns None if data insufficient."""
+    if len(candles) < period + 1:
+        return None
+    window = [c["volume"] for c in candles[-(period + 1) : -1]]
+    mean = sum(window) / len(window)
+    variance = sum((v - mean) ** 2 for v in window) / len(window)
+    std = variance ** 0.5 if variance > 0 else 0.0
+    if std == 0:
+        return None
+    current = candles[-1]["volume"]
+    return (current - mean) / std
+
+
 def _last_n_candles_movement(candles: list[dict], n: int) -> float:
     """Total absolute movement over last n candles (high-low range sum)."""
     if len(candles) < n:
@@ -123,7 +137,7 @@ class BreakoutStrategy:
     BREAKOUT_LOOKBACK = 20
     BREAKOUT_THRESHOLD = 0.001
     VOLUME_LOOKBACK = 20
-    VOLUME_MULTIPLIER = 0.05  # min volume = 5% of avg (was 1.5; low vol still allows entry when compression+breakout)
+    VOLUME_ZSCORE_THRESHOLD = -0.5  # breakout candle volume Z-score floor
     OVEREXTENSION_LOOKBACK = 10
     ATR_PERIOD = 14
     ATR_OVEREXTENSION = 2.5
@@ -233,31 +247,13 @@ class BreakoutStrategy:
         current_vol = candles[-1]["volume"]
         avg_vol = _average_volume(candles, self.VOLUME_LOOKBACK)
         volume_ratio = current_vol / avg_vol if avg_vol and avg_vol > 0 else 0.0
+        vol_z = _volume_zscore(candles, self.VOLUME_LOOKBACK)
 
         if movement >= overext_threshold:
             self._store_evaluation(
                 bb_width_pct, current_atr, volume_ratio, "High Volatility", [
                     f"BB width Z-score {current_z:.2f} → compression",
                     f"Movement {movement:.2f} >= overextension threshold {overext_threshold:.2f} → filtered",
-                ], close_price,
-                bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
-            )
-            return None
-
-        if avg_vol is None or avg_vol <= 0:
-            self._store_evaluation(
-                bb_width_pct, current_atr, volume_ratio, "Ranging", [
-                    f"BB width Z-score {current_z:.2f} → compression",
-                    "Average volume not available",
-                ], close_price,
-                bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
-            )
-            return None
-        if current_vol < self.VOLUME_MULTIPLIER * avg_vol:
-            self._store_evaluation(
-                bb_width_pct, current_atr, volume_ratio, "Ranging", [
-                    f"BB width Z-score {current_z:.2f} → compression",
-                    f"Volume {volume_ratio:.2f}x below threshold {self.VOLUME_MULTIPLIER}x",
                 ], close_price,
                 bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
             )
@@ -270,12 +266,46 @@ class BreakoutStrategy:
         signal_time = timestamps[-1] if timestamps else ""
         signal_candle_ts = signal_time
 
-        if close >= high_20 * (1 + self.BREAKOUT_THRESHOLD):
+        breakout_long = close >= high_20 * (1 + self.BREAKOUT_THRESHOLD)
+        breakout_short = close <= low_20 * (1 - self.BREAKOUT_THRESHOLD)
+
+        if not breakout_long and not breakout_short:
+            self._store_evaluation(
+                bb_width_pct, current_atr, volume_ratio, "Ranging", [
+                    f"BB width Z-score {current_z:.2f} → compression",
+                    f"Volume Z-score {vol_z:.2f}" if vol_z is not None else "Volume Z-score N/A",
+                    "No breakout above high or below low",
+                ], close_price,
+                bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
+            )
+            return None
+
+        if vol_z is None:
+            self._store_evaluation(
+                bb_width_pct, current_atr, volume_ratio, "Ranging", [
+                    f"BB width Z-score {current_z:.2f} → compression",
+                    "Breakout detected but volume std is zero — cannot validate liquidity",
+                ], close_price,
+                bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
+            )
+            return None
+
+        if vol_z < self.VOLUME_ZSCORE_THRESHOLD:
+            direction = "above 20-bar high" if breakout_long else "below 20-bar low"
+            self._store_evaluation(
+                bb_width_pct, current_atr, volume_ratio, "Ranging", [
+                    f"BB width Z-score {current_z:.2f} → compression",
+                    f"Breakout {direction} detected but volume Z-score too low: {vol_z:.2f} (need >= {self.VOLUME_ZSCORE_THRESHOLD})",
+                ], close_price,
+                bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
+            )
+            return None
+
+        if breakout_long:
             self._store_evaluation(
                 bb_width_pct, current_atr, volume_ratio, "Trending", [
                     f"BB width Z-score {current_z:.2f} → compression",
-                    f"Volume {volume_ratio:.2f}x above average",
-                    "Breakout confirmed above 20-bar high",
+                    f"Breakout confirmed above 20-bar high with volume Z-score: {vol_z:.2f}",
                 ], close_price,
                 bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
             )
@@ -285,27 +315,16 @@ class BreakoutStrategy:
                 signal_time=signal_time,
                 signal_candle_ts=signal_candle_ts,
             )
-        if close <= low_20 * (1 - self.BREAKOUT_THRESHOLD):
-            self._store_evaluation(
-                bb_width_pct, current_atr, volume_ratio, "Trending", [
-                    f"BB width Z-score {current_z:.2f} → compression",
-                    f"Volume {volume_ratio:.2f}x above average",
-                    "Breakout confirmed below 20-bar low",
-                ], close_price,
-                bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
-            )
-            return Signal(
-                symbol=self._symbol,
-                side=Side.SHORT,
-                signal_time=signal_time,
-                signal_candle_ts=signal_candle_ts,
-            )
         self._store_evaluation(
-            bb_width_pct, current_atr, volume_ratio, "Ranging", [
+            bb_width_pct, current_atr, volume_ratio, "Trending", [
                 f"BB width Z-score {current_z:.2f} → compression",
-                f"Volume {volume_ratio:.2f}x above average",
-                "No breakout above high or below low",
+                f"Breakout confirmed below 20-bar low with volume Z-score: {vol_z:.2f}",
             ], close_price,
             bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
         )
-        return None
+        return Signal(
+            symbol=self._symbol,
+            side=Side.SHORT,
+            signal_time=signal_time,
+            signal_candle_ts=signal_candle_ts,
+        )
