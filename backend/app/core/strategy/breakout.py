@@ -137,7 +137,8 @@ class BreakoutStrategy:
     BREAKOUT_LOOKBACK = 20
     BREAKOUT_THRESHOLD = 0.001
     VOLUME_LOOKBACK = 20
-    VOLUME_ZSCORE_THRESHOLD = -0.5  # breakout candle volume Z-score floor
+    VOLUME_ZSCORE_LONG_THRESHOLD = -0.3   # long breakout requires closer-to-average participation
+    VOLUME_ZSCORE_SHORT_THRESHOLD = -0.7  # short breakdown may proceed under thinner liquidity
     OVEREXTENSION_LOOKBACK = 10
     ATR_PERIOD = 14
     ATR_OVEREXTENSION = 2.5
@@ -280,28 +281,25 @@ class BreakoutStrategy:
             )
             return None
 
-        if vol_z is None:
-            self._store_evaluation(
-                bb_width_pct, current_atr, volume_ratio, "Ranging", [
-                    f"BB width Z-score {current_z:.2f} → compression",
-                    "Breakout detected but volume std is zero — cannot validate liquidity",
-                ], close_price,
-                bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
-            )
-            return None
-
-        if vol_z < self.VOLUME_ZSCORE_THRESHOLD:
-            direction = "above 20-bar high" if breakout_long else "below 20-bar low"
-            self._store_evaluation(
-                bb_width_pct, current_atr, volume_ratio, "Ranging", [
-                    f"BB width Z-score {current_z:.2f} → compression",
-                    f"Breakout {direction} detected but volume Z-score too low: {vol_z:.2f} (need >= {self.VOLUME_ZSCORE_THRESHOLD})",
-                ], close_price,
-                bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
-            )
-            return None
-
         if breakout_long:
+            if vol_z is None:
+                self._store_evaluation(
+                    bb_width_pct, current_atr, volume_ratio, "Ranging", [
+                        f"BB width Z-score {current_z:.2f} → compression",
+                        "Breakout above high detected but volume std is zero — cannot validate liquidity",
+                    ], close_price,
+                    bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
+                )
+                return None
+            if vol_z < self.VOLUME_ZSCORE_LONG_THRESHOLD:
+                self._store_evaluation(
+                    bb_width_pct, current_atr, volume_ratio, "Ranging", [
+                        f"BB width Z-score {current_z:.2f} → compression",
+                        f"Breakout above high detected but volume Z-score too low for LONG: {vol_z:.2f} (need >= {self.VOLUME_ZSCORE_LONG_THRESHOLD})",
+                    ], close_price,
+                    bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
+                )
+                return None
             self._store_evaluation(
                 bb_width_pct, current_atr, volume_ratio, "Trending", [
                     f"BB width Z-score {current_z:.2f} → compression",
@@ -315,6 +313,26 @@ class BreakoutStrategy:
                 signal_time=signal_time,
                 signal_candle_ts=signal_candle_ts,
             )
+
+        # breakout_short
+        if vol_z is None:
+            self._store_evaluation(
+                bb_width_pct, current_atr, volume_ratio, "Ranging", [
+                    f"BB width Z-score {current_z:.2f} → compression",
+                    "Breakout below low detected but volume std is zero — cannot validate liquidity",
+                ], close_price,
+                bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
+            )
+            return None
+        if vol_z < self.VOLUME_ZSCORE_SHORT_THRESHOLD:
+            self._store_evaluation(
+                bb_width_pct, current_atr, volume_ratio, "Ranging", [
+                    f"BB width Z-score {current_z:.2f} → compression",
+                    f"Breakout below low detected but volume Z-score too low for SHORT: {vol_z:.2f} (need >= {self.VOLUME_ZSCORE_SHORT_THRESHOLD})",
+                ], close_price,
+                bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
+            )
+            return None
         self._store_evaluation(
             bb_width_pct, current_atr, volume_ratio, "Trending", [
                 f"BB width Z-score {current_z:.2f} → compression",
