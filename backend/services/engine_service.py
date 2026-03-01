@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from typing import Any, Callable, Optional
 
 from app.config.settings import Settings
@@ -71,6 +72,8 @@ class EngineService:
         self._market_stream: Optional[BinanceMarketStream] = None
         self._user_stream: Optional[BinanceUserStream] = None
         self._critical_error: Optional[str] = None
+        self._equity_value: float = 0.0
+        self._equity_ts: float = 0.0
 
     def _build_engine(self) -> BFATEngine:
         """Construct engine with all dependencies."""
@@ -102,22 +105,27 @@ class EngineService:
             symbol=self._settings.bfat_symbol,
         )
 
+    _EQUITY_TTL = 5.0  # seconds — fetch from Binance at most once per TTL
+
     def _equity_provider(self) -> float:
-        """Fetch current equity from Binance (no cache). Returns 0.0 if not configured or on error."""
+        """Return equity with short TTL. Fetches from Binance if stale; returns last known value on failure."""
+        now = time.monotonic()
+        if now - self._equity_ts < self._EQUITY_TTL:
+            return self._equity_value
         if not self._binance_account.is_configured():
-            return 0.0
+            return self._equity_value
         try:
             acct = self._binance_account.account()
             total = _extract_equity_from_account(acct)
-            if total > 0:
-                logger.info("Equity: %.2f USDT", total)
+            self._equity_value = total
+            self._equity_ts = now
             return total
         except Exception as e:
             logger.warning("Equity fetch failed: %s", e)
-            return 0.0
+            return self._equity_value
 
     def _get_status(self) -> dict[str, Any]:
-        """Build status dict for API/WebSocket. Fetches equity from Binance each time."""
+        """Build status dict for API/WebSocket."""
         equity = self._equity_provider()
         if self._engine is None:
             return {
