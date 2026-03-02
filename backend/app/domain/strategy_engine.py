@@ -14,11 +14,10 @@ from typing import Any, Optional, Union
 
 from app.core.strategy.breakout import BreakoutStrategy
 from app.domain.enums import Side
-from app.domain.regime_classifier import RegimeClassifier
+from app.domain.regime_classifier import RegimeClassifier, _adx
 from app.domain.signal import CloseSignal, Signal
 from app.domain.strategies.range_strategy import RangeStrategy
 
-# Strong-momentum thresholds for immediate entry after regime switch
 _MOMENTUM_ADX_THRESHOLD = 25
 _MOMENTUM_VOL_Z_THRESHOLD = 1.0
 _MOMENTUM_BODY_RATIO_THRESHOLD = 0.6
@@ -53,7 +52,7 @@ class StrategyEngine:
 
     * Only ONE strategy is active at a time.
     * Regime change with losing position → CloseSignal.
-    * Regime change with winning position → hold + cooldown.
+    * Regime change with winning position → hold + cooldown (no strategy eval).
     * Strong-momentum bypass for immediate entry after regime switch.
     * Score-based position sizing applied to every signal.
     """
@@ -101,17 +100,12 @@ class StrategyEngine:
             if current_position is not None:
                 unrealized = self._unrealized_pnl(current_position, candles)
                 if unrealized < 0:
-                    self._evaluate_active_strategy(candles)
                     return CloseSignal(reason="Regime Switch - Losing Position")
-                # Winning position → keep it, enter cooldown
                 self._regime_switch_cooldown = _COOLDOWN_BARS
-                self._evaluate_active_strategy(candles)
                 return None
 
-            # No position — allow immediate entry only if strong momentum
-            if not self._check_strong_momentum(candles, rc_details):
+            if not self._check_strong_momentum(candles):
                 self._regime_switch_cooldown = _COOLDOWN_BARS
-                self._evaluate_active_strategy(candles)
                 return None
         else:
             self._active_regime = regime
@@ -119,7 +113,6 @@ class StrategyEngine:
         # ── 2. Cooldown gate ──────────────────────────────────────
         if self._regime_switch_cooldown > 0:
             self._regime_switch_cooldown -= 1
-            self._evaluate_active_strategy(candles)
             return None
 
         # ── 3. Active strategy evaluation ─────────────────────────
@@ -187,10 +180,13 @@ class StrategyEngine:
         return (position.entry_price - close) * position.size
 
     @staticmethod
-    def _check_strong_momentum(candles: list[dict], rc_details: dict) -> bool:
-        """At least 2 of 3 momentum conditions met → allow immediate entry."""
+    def _check_strong_momentum(candles: list[dict]) -> bool:
+        """At least 2 of 3 momentum conditions met → allow immediate entry.
+
+        Uses raw _adx() directly on candles (no hysteresis dependency).
+        """
         met = 0
-        adx = rc_details.get("adx")
+        adx = _adx(candles)
         if adx is not None and adx > _MOMENTUM_ADX_THRESHOLD:
             met += 1
         vol_z = _volume_zscore(candles)
