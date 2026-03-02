@@ -324,6 +324,9 @@ class EngineService:
             "regime": details.get("regime", "Unknown"),
             "active_strategy": details.get("active_strategy", "Unknown"),
             "regime_changed": details.get("regime_changed", False),
+            "regime_score": details.get("regime_score", 0),
+            "position_scale": details.get("position_scale", 1.0),
+            "cooldown_remaining": details.get("cooldown_remaining", 0),
             "engine_reasoning": details.get("engine_reasoning", []),
             # Breakout-specific (defaults when Range is active)
             "volatility_score": details.get("volatility_score", 0.0),

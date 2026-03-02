@@ -232,6 +232,7 @@ class BFATEngine:
             position_size = self._risk_manager.calculate_position_size(
                 equity, entry_price_est, stop_price_est
             )
+            position_size *= signal.position_scale
             if position_size <= 0:
                 return
             try:
