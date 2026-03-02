@@ -149,6 +149,7 @@ class BFATEngine:
         equity_repository: Any,
         system_log_repository: Any,
         symbol: str,
+        regime_classifier: Any = None,
     ) -> None:
         self._strategy = strategy
         self._risk_manager = risk_manager
@@ -159,6 +160,7 @@ class BFATEngine:
         self._equity_repo = equity_repository
         self._system_log = system_log_repository
         self._symbol = symbol
+        self._regime_classifier = regime_classifier
         self._current_stop_order_id: str | None = None
         self._last_signal_candle_ts: str = ""
 
@@ -179,6 +181,8 @@ class BFATEngine:
 
     def evaluate_for_insight(self, candles: list[dict]) -> None:
         """Run strategy evaluation to populate Insight only. No orders, no position changes."""
+        if self._regime_classifier is not None:
+            self._regime_classifier.evaluate(candles)
         self._strategy.evaluate(candles)
 
     def on_candle_close(self, candles: list[dict], equity: float) -> None:
@@ -190,9 +194,22 @@ class BFATEngine:
         if self._state_machine.state == PositionState.ENTERING:
             return
 
+        # Regime classification — always evaluated so Insight stays fresh
+        regime = "TRENDING"
+        if self._regime_classifier is not None:
+            regime = self._regime_classifier.evaluate(candles)
+
         if self._state_machine.state == PositionState.FLAT:
             signal = self._strategy.evaluate(candles)
             if not signal:
+                return
+            if regime != "TRENDING":
+                # Strategy detected a signal but regime blocks entry
+                ev = getattr(self._strategy, "_last_evaluation", None)
+                if isinstance(ev, dict):
+                    ev.setdefault("engine_reasoning", []).append(
+                        f"Regime is {regime} — entry blocked (TRENDING required)"
+                    )
                 return
             if signal.signal_candle_ts == self._last_signal_candle_ts:
                 return

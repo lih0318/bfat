@@ -2,6 +2,7 @@
 
 from app.domain.enums import PositionState, Side, StopPhase
 from app.domain.position import Position
+from app.domain.regime_classifier import RegimeClassifier
 from app.domain.signal import Signal
 from app.domain.state_machine import StateMachine
 
@@ -10,6 +11,7 @@ __all__ = [
     "StopPhase",
     "Side",
     "Position",
+    "RegimeClassifier",
     "Signal",
     "StateMachine",
 ]
