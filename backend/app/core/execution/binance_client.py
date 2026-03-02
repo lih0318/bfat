@@ -2,6 +2,8 @@
 
 import hashlib
 import hmac
+import logging
+import math
 import os
 import time
 import urllib.parse
@@ -11,9 +13,12 @@ import requests
 
 from app.domain.enums import Side
 
+logger = logging.getLogger(__name__)
 
 BINANCE_FUTURES_MAINNET = "https://fapi.binance.com"
 BINANCE_FUTURES_TESTNET = "https://testnet.binancefuture.com"
+
+_EXCHANGE_INFO_TTL = 3600  # re-fetch exchange info every 1 hour
 
 
 def _generate_client_order_id(prefix: str) -> str:
@@ -28,6 +33,20 @@ def _side_to_binance(side: Side, for_reduce_only: bool = False) -> str:
     if for_reduce_only:
         return "SELL" if side == Side.LONG else "BUY"
     return "BUY" if side == Side.LONG else "SELL"
+
+
+def _step_to_precision(step: float) -> int:
+    """Convert step size (e.g. 0.001) to decimal precision (3)."""
+    if step <= 0 or step >= 1:
+        return 0
+    return max(0, int(round(-math.log10(step))))
+
+
+def _floor_to_step(value: float, step: float, precision: int) -> float:
+    """Floor value to the nearest step."""
+    if step <= 0:
+        return value
+    return round(math.floor(value / step) * step, precision)
 
 
 class BinanceExecutionClient:
@@ -45,6 +64,8 @@ class BinanceExecutionClient:
         self._base_url = base_url or (
             BINANCE_FUTURES_TESTNET if testnet else BINANCE_FUTURES_MAINNET
         )
+        self._symbol_filters: dict[str, dict[str, Any]] = {}
+        self._exchange_info_ts: float = 0.0
 
     def _sign(self, params: dict[str, Any]) -> str:
         """Sign params with HMAC-SHA256. Converts bool to Binance string format."""
@@ -84,6 +105,70 @@ class BinanceExecutionClient:
         """POST /fapi/v1/order."""
         return self._request("POST", "/fapi/v1/order", params)
 
+    # ── Exchange info & precision ─────────────────────────────────
+
+    def _load_exchange_info(self) -> None:
+        """Fetch /fapi/v1/exchangeInfo and cache LOT_SIZE + PRICE_FILTER per symbol."""
+        now = time.monotonic()
+        if self._symbol_filters and now - self._exchange_info_ts < _EXCHANGE_INFO_TTL:
+            return
+        try:
+            url = f"{self._base_url}/fapi/v1/exchangeInfo"
+            resp = requests.get(url, timeout=10)
+            if resp.status_code != 200:
+                logger.warning("exchangeInfo fetch failed: %s", resp.status_code)
+                return
+            data = resp.json()
+            for sym in data.get("symbols", []):
+                name = sym.get("symbol")
+                if not name:
+                    continue
+                filters: dict[str, Any] = {}
+                for f in sym.get("filters", []):
+                    ft = f.get("filterType")
+                    if ft == "LOT_SIZE":
+                        filters["qty_step"] = float(f.get("stepSize", 0))
+                        filters["qty_min"] = float(f.get("minQty", 0))
+                        filters["qty_precision"] = _step_to_precision(filters["qty_step"])
+                    elif ft == "PRICE_FILTER":
+                        filters["price_step"] = float(f.get("tickSize", 0))
+                        filters["price_precision"] = _step_to_precision(filters["price_step"])
+                if filters:
+                    self._symbol_filters[name] = filters
+            self._exchange_info_ts = now
+            logger.info("exchangeInfo loaded: %d symbols", len(self._symbol_filters))
+        except Exception as e:
+            logger.warning("exchangeInfo load error: %s", e)
+
+    def _get_filters(self, symbol: str) -> dict[str, Any]:
+        self._load_exchange_info()
+        return self._symbol_filters.get(symbol, {})
+
+    def format_quantity(self, symbol: str, qty: float) -> float:
+        """Floor quantity to LOT_SIZE step. Returns 0 if below minQty."""
+        f = self._get_filters(symbol)
+        step = f.get("qty_step", 0)
+        precision = f.get("qty_precision", 3)
+        min_qty = f.get("qty_min", 0)
+        if step > 0:
+            qty = _floor_to_step(qty, step, precision)
+        else:
+            qty = round(qty, 3)
+        if qty < min_qty:
+            return 0.0
+        return qty
+
+    def format_price(self, symbol: str, price: float) -> float:
+        """Round price to PRICE_FILTER tick size."""
+        f = self._get_filters(symbol)
+        step = f.get("price_step", 0)
+        precision = f.get("price_precision", 2)
+        if step > 0:
+            return _floor_to_step(price, step, precision)
+        return round(price, 2)
+
+    # ── Order methods ─────────────────────────────────────────────
+
     def place_market_order(
         self,
         symbol: str,
@@ -91,9 +176,10 @@ class BinanceExecutionClient:
         quantity: float,
         client_order_id: str,
     ) -> dict:
-        """Place MARKET order. Returns raw response dict."""
+        """Place MARKET order. Quantity is formatted to LOT_SIZE."""
+        quantity = self.format_quantity(symbol, quantity)
         if quantity <= 0:
-            raise ValueError("quantity must be positive")
+            raise ValueError(f"quantity after LOT_SIZE formatting is 0 (below minQty for {symbol})")
         params = {
             "symbol": symbol,
             "side": _side_to_binance(side, for_reduce_only=False),
@@ -111,9 +197,11 @@ class BinanceExecutionClient:
         stop_price: float,
         client_order_id: str,
     ) -> dict:
-        """Place STOP_MARKET reduceOnly order. Returns raw response dict."""
+        """Place STOP_MARKET reduceOnly order. Quantity and price are formatted."""
+        quantity = self.format_quantity(symbol, quantity)
+        stop_price = self.format_price(symbol, stop_price)
         if quantity <= 0:
-            raise ValueError("quantity must be positive")
+            raise ValueError(f"quantity after LOT_SIZE formatting is 0 (below minQty for {symbol})")
         if stop_price <= 0:
             raise ValueError("stop_price must be positive")
         params = {
