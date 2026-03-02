@@ -132,16 +132,17 @@ class StrategyEngine:
         return signal
 
     def evaluate_for_insight(self, candles: list[dict]) -> None:
-        """Insight seeding only — no position awareness, no CloseSignal."""
+        """Insight seeding — evaluate BOTH strategies so both sights are available."""
         regime = self.regime_classifier.evaluate(candles)
         rc_details = self.regime_classifier.get_last_details()
         self._active_regime = regime
         self._last_score = rc_details.get("score", 0)
         self._last_position_scale = _position_scale_for_score(self._last_score)
-        self._evaluate_active_strategy(candles)
+        self.breakout_strategy.evaluate(candles)
+        self.range_strategy.evaluate(candles)
 
     def get_last_evaluation_details(self) -> dict:
-        """Merged insight: active strategy details + regime + sizing."""
+        """Merged insight: active strategy + trend_reference + range_reference."""
         if self._active_regime == "TRENDING":
             details = dict(self.breakout_strategy.get_last_evaluation_details())
         elif self._active_regime == "RANGING":
@@ -158,6 +159,24 @@ class StrategyEngine:
         details["position_scale"] = self._last_position_scale
         details["cooldown_remaining"] = self._regime_switch_cooldown
         details["regime_classifier"] = self.regime_classifier.get_last_details()
+
+        bd = self.breakout_strategy.get_last_evaluation_details()
+        details["trend_reference"] = {
+            "volatility_score": bd.get("volatility_score"),
+            "bb_width_percentile": bd.get("bb_width_percentile"),
+            "atr_value": bd.get("atr_value"),
+            "volume_ratio": bd.get("volume_ratio"),
+            "bb_width_z": bd.get("bb_width_z"),
+        }
+        rd = self.range_strategy.get_last_evaluation_details()
+        details["range_reference"] = {
+            "range_high": rd.get("range_high"),
+            "range_low": rd.get("range_low"),
+            "range_mid": rd.get("range_mid"),
+            "rsi": rd.get("rsi"),
+            "volume_zscore": rd.get("volume_zscore"),
+            "close_price": rd.get("close_price"),
+        }
         return details
 
     # ── Internal helpers ───────────────────────────────────────────

@@ -328,7 +328,6 @@ class EngineService:
             "position_scale": details.get("position_scale", 1.0),
             "cooldown_remaining": details.get("cooldown_remaining", 0),
             "engine_reasoning": details.get("engine_reasoning", []),
-            # Breakout-specific (defaults when Range is active)
             "volatility_score": details.get("volatility_score", 0.0),
             "bb_width_percentile": details.get("bb_width_percentile", 0.0),
             "atr_value": details.get("atr_value", 0.0),
@@ -338,12 +337,14 @@ class EngineService:
             result["bb_width_z"] = details["bb_width_z"]
         if "compression_model" in details:
             result["compression_model"] = details["compression_model"]
-        # Range-specific (defaults when Breakout is active)
-        for k in ("rsi", "range_high", "range_low", "range_mid", "volume_zscore"):
+        for k in ("rsi", "range_high", "range_low", "range_mid", "volume_zscore", "close_price"):
             if k in details:
                 result[k] = details[k]
-        # Regime classifier sub-object
         rc_details = details.get("regime_classifier")
         if rc_details:
             result["regime_classifier"] = rc_details
+        if "trend_reference" in details:
+            result["trend_reference"] = details["trend_reference"]
+        if "range_reference" in details:
+            result["range_reference"] = details["range_reference"]
         return result
