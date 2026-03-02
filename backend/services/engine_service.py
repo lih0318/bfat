@@ -11,10 +11,9 @@ from app.core.engine import BFATEngine
 from app.core.execution import BinanceExecutionClient
 from app.core.market.binance_market_stream import BinanceMarketStream
 from app.core.risk import KillSwitch, RiskManager
-from app.core.strategy.breakout import BreakoutStrategy
 from app.core.ws.binance_user_stream import BinanceUserStream
-from app.domain.regime_classifier import RegimeClassifier
 from app.domain.state_machine import StateMachine
+from app.domain.strategy_engine import StrategyEngine
 from app.persistence import create_persistence
 from app.services.binance_account import BinanceAccountClient
 
@@ -92,11 +91,10 @@ class EngineService:
         )
         kill_switch = KillSwitch()
         risk_manager = RiskManager()
-        strategy = BreakoutStrategy()
         state_machine = StateMachine()
-        regime_classifier = RegimeClassifier()
+        strategy_engine = StrategyEngine(symbol=self._settings.bfat_symbol)
         return BFATEngine(
-            strategy=strategy,
+            strategy_engine=strategy_engine,
             risk_manager=risk_manager,
             kill_switch=kill_switch,
             execution_client=execution,
@@ -105,7 +103,6 @@ class EngineService:
             equity_repository=equity_repo,
             system_log_repository=system_log_repo,
             symbol=self._settings.bfat_symbol,
-            regime_classifier=regime_classifier,
         )
 
     _EQUITY_TTL = 5.0  # seconds — fetch from Binance at most once per TTL
@@ -304,8 +301,10 @@ class EngineService:
 
     def get_insight(self) -> dict[str, Any]:
         """Return last strategy evaluation + regime classifier data for insight API."""
-        default = {
+        default: dict[str, Any] = {
             "regime": "Unknown",
+            "active_strategy": "Unknown",
+            "regime_changed": False,
             "volatility_score": 0.0,
             "bb_width_percentile": 0.0,
             "atr_value": 0.0,
@@ -314,36 +313,34 @@ class EngineService:
         }
         if self._engine is None:
             return default
-        strategy = getattr(self._engine, "_strategy", None)
-        if strategy is None:
+        se = getattr(self._engine, "_strategy_engine", None)
+        if se is None:
             return default
-        details = getattr(strategy, "get_last_evaluation_details", lambda: {})()
+        details = getattr(se, "get_last_evaluation_details", lambda: {})()
         if not details:
             return default
+
         result: dict[str, Any] = {
             "regime": details.get("regime", "Unknown"),
+            "active_strategy": details.get("active_strategy", "Unknown"),
+            "regime_changed": details.get("regime_changed", False),
+            "engine_reasoning": details.get("engine_reasoning", []),
+            # Breakout-specific (defaults when Range is active)
             "volatility_score": details.get("volatility_score", 0.0),
             "bb_width_percentile": details.get("bb_width_percentile", 0.0),
             "atr_value": details.get("atr_value", 0.0),
             "volume_ratio": details.get("volume_ratio", 0.0),
-            "engine_reasoning": details.get("engine_reasoning", []),
         }
         if "bb_width_z" in details:
             result["bb_width_z"] = details["bb_width_z"]
         if "compression_model" in details:
             result["compression_model"] = details["compression_model"]
-
-        # Regime classifier overlay
-        rc = getattr(self._engine, "_regime_classifier", None)
-        if rc is not None:
-            rc_details = getattr(rc, "get_last_details", lambda: {})()
-            if rc_details:
-                result["regime"] = rc_details.get("regime", result["regime"])
-                result["regime_classifier"] = {
-                    "adx": rc_details.get("adx"),
-                    "bb_width_percentile": rc_details.get("bb_width_percentile"),
-                    "hh_ratio": rc_details.get("hh_ratio"),
-                    "ll_ratio": rc_details.get("ll_ratio"),
-                    "score": rc_details.get("score"),
-                }
+        # Range-specific (defaults when Breakout is active)
+        for k in ("rsi", "range_high", "range_low", "range_mid", "volume_zscore"):
+            if k in details:
+                result[k] = details[k]
+        # Regime classifier sub-object
+        rc_details = details.get("regime_classifier")
+        if rc_details:
+            result["regime_classifier"] = rc_details
         return result
