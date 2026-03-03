@@ -100,7 +100,7 @@ async def ws_status(websocket: WebSocket):
         await websocket.close(code=4001)
         return
     await websocket.accept()
-    interval = 1.0
+    interval = 3.0
     try:
         while True:
             svc = websocket.app.state.engine_service

@@ -77,6 +77,8 @@ class EngineService:
         self._critical_error: Optional[str] = None
         self._equity_value: float = 0.0
         self._equity_ts: float = 0.0
+        self._live_pos_cache: dict[str, Any] | None = None
+        self._live_pos_ts: float = 0.0
 
     def _build_engine(self) -> BFATEngine:
         """Construct engine with all dependencies."""
@@ -108,7 +110,7 @@ class EngineService:
             symbol=self._settings.bfat_symbol,
         )
 
-    _EQUITY_TTL = 5.0  # seconds — fetch from Binance at most once per TTL
+    _EQUITY_TTL = 15.0  # seconds — fetch from Binance at most once per TTL
 
     def _equity_provider(self) -> float:
         """Return equity with short TTL. Fetches from Binance if stale; returns last known value on failure."""
@@ -127,20 +129,26 @@ class EngineService:
             logger.warning("Equity fetch failed: %s", e)
             return self._equity_value
 
+    _LIVE_POS_TTL = 30.0  # seconds — rate-limit Binance position queries
+
     def _fetch_binance_position(self) -> dict[str, Any] | None:
-        """Query Binance for a live position on the configured symbol. Returns pos dict or None."""
+        """Query Binance for a live position. Cached for _LIVE_POS_TTL seconds."""
+        now = time.monotonic()
+        if now - self._live_pos_ts < self._LIVE_POS_TTL:
+            return self._live_pos_cache
         if not self._binance_account.is_configured():
             return None
         try:
             acct = self._binance_account.account()
+            result = None
             for p in acct.get("positions", []):
                 if p.get("symbol") == self._settings.bfat_symbol:
                     amt = float(p.get("positionAmt", 0))
                     if amt == 0:
-                        return None
+                        break
                     entry_price = float(p.get("entryPrice", 0))
                     unrealized = float(p.get("unrealizedProfit", 0))
-                    return {
+                    result = {
                         "symbol": self._settings.bfat_symbol,
                         "side": "long" if amt > 0 else "short",
                         "size": abs(amt),
@@ -153,10 +161,13 @@ class EngineService:
                         "unrealized_pnl": unrealized,
                         "source": "binance",
                     }
-            return None
+                    break
+            self._live_pos_cache = result
+            self._live_pos_ts = now
+            return result
         except Exception as e:
             logger.debug("Binance live position fetch failed: %s", e)
-            return None
+            return self._live_pos_cache
 
     def _get_status(self) -> dict[str, Any]:
         """Build status dict for API/WebSocket."""

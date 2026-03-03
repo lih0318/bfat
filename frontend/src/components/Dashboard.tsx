@@ -111,21 +111,14 @@ export function Dashboard() {
       if (cancelled || !res.ok) return
       try {
         const d = await res.json()
-        let eq = extractEquity(d)
-        if (eq == null) {
-          const accRes = await apiFetch('/api/account/account', { token: accessToken })
-          if (!cancelled && accRes.ok) {
-            const acc = await accRes.json()
-            eq = extractEquity(acc)
-          }
-        }
+        const eq = extractEquity(d)
         if (eq != null) setEquityFallback(eq)
       } catch {
         // ignore
       }
     }
     fetchEquity()
-    const interval = setInterval(fetchEquity, 5000)
+    const interval = setInterval(fetchEquity, 30000)
     return () => {
       cancelled = true
       clearInterval(interval)

@@ -46,17 +46,7 @@ async def get_equity(
     request: Request,
     _: str = Depends(get_current_user),
 ):
-    """Return current equity from Binance (no cache)."""
-    bac = getattr(request.app.state, "binance_account_client", None)
-    if bac is not None and bac.is_configured():
-        try:
-            acct = bac.account()
-            eq = _extract_equity(acct)
-            if eq > 0:
-                logger.info("Equity from /api/equity: %.2f USDT", eq)
-            return {"equity": eq}
-        except Exception as e:
-            logger.warning("Equity fetch from Binance failed: %s", e)
+    """Return cached equity (TTL-managed by engine service). No direct Binance call."""
     svc = getattr(request.app.state, "engine_service", None)
     if svc is not None and hasattr(svc, "_equity_provider"):
         try:
