@@ -47,9 +47,15 @@ export function Dashboard() {
   useEffect(() => {
     const url = wsUrl()
     if (!url) return
+    let cancelled = false
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+    let failures = 0
     let ws: WebSocket | null = null
+    const MAX_FAILURES = 5
     const connect = () => {
+      if (cancelled) return
       ws = new WebSocket(url)
+      ws.onopen = () => { failures = 0 }
       ws.onmessage = (e) => {
         try {
           const data = JSON.parse(e.data)
@@ -59,11 +65,17 @@ export function Dashboard() {
         }
       }
       ws.onclose = () => {
-        setTimeout(connect, 3000)
+        if (cancelled) return
+        failures++
+        if (failures >= MAX_FAILURES) return
+        const delay = Math.min(3000 * Math.pow(2, failures - 1), 30000)
+        reconnectTimer = setTimeout(connect, delay)
       }
     }
     connect()
     return () => {
+      cancelled = true
+      if (reconnectTimer) clearTimeout(reconnectTimer)
       ws?.close()
     }
   }, [wsUrl])

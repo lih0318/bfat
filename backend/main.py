@@ -93,11 +93,11 @@ async def ws_status(websocket: WebSocket):
     token = websocket.query_params.get("token")
     settings = websocket.app.state.settings
     if not token:
-        await websocket.close(code=4001)
+        await websocket.close(code=4001, reason="missing token")
         return
     payload = decode_token(token, settings.jwt_secret)
     if not payload or payload.get("type") != "access":
-        await websocket.close(code=4001)
+        await websocket.close(code=4003, reason="invalid or expired token")
         return
     await websocket.accept()
     interval = 3.0
