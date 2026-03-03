@@ -408,78 +408,87 @@ class EngineService:
         return repo
 
     @staticmethod
-    def _holding_duration(entry_ts: str, exit_ts: str) -> tuple[int, str]:
+    def _safe_float(val: Any, default: float = 0.0) -> float:
+        """Safely convert DB value to float. Handles str, None, non-numeric."""
+        if val is None:
+            return default
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _holding_duration(entry_ts: Any, exit_ts: Any) -> tuple[int, str]:
         """Return (seconds, readable) for holding duration between ISO timestamps."""
+        entry_ts = str(entry_ts) if entry_ts is not None else ""
+        exit_ts = str(exit_ts) if exit_ts is not None else ""
+        if not entry_ts or not exit_ts:
+            return 0, "–"
         try:
             fmt1 = "%Y-%m-%dT%H:%M:%SZ"
             fmt2 = "%Y-%m-%dT%H:%M:%S"
+            t_entry = None
             for fmt in (fmt1, fmt2):
                 try:
                     t_entry = datetime.strptime(entry_ts, fmt)
                     break
                 except ValueError:
-                    t_entry = None
+                    pass
+            t_exit = None
             for fmt in (fmt1, fmt2):
                 try:
                     t_exit = datetime.strptime(exit_ts, fmt)
                     break
                 except ValueError:
-                    t_exit = None
+                    pass
             if t_entry is None or t_exit is None:
                 return 0, "–"
-            secs = int((t_exit - t_entry).total_seconds())
-            if secs < 0:
-                secs = 0
+            secs = max(0, int((t_exit - t_entry).total_seconds()))
             h, rem = divmod(secs, 3600)
             m, _ = divmod(rem, 60)
-            if h > 0:
-                readable = f"{h}h {m}m"
-            else:
-                readable = f"{m}m"
+            readable = f"{h}h {m}m" if h > 0 else f"{m}m"
             return secs, readable
         except Exception:
             return 0, "–"
 
     def get_trades(self, symbol: str, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
         """Return closed trades with computed display fields from DB only."""
+        sf = self._safe_float
         rows = self._get_trade_repo().query(symbol=symbol, limit=limit, offset=offset)
         result: list[dict[str, Any]] = []
         for r in rows:
-            entry_price = r.get("entry_price") or 0
-            exit_price = r.get("exit_price") or 0
-            side = (r.get("side") or "").upper()
+            entry_price = sf(r.get("entry_price"))
+            exit_price = sf(r.get("exit_price"))
+            side = (str(r.get("side") or "")).upper()
+            pnl_pct = 0.0
             if entry_price > 0:
                 if side == "LONG":
                     pnl_pct = (exit_price - entry_price) / entry_price * 100
                 elif side == "SHORT":
                     pnl_pct = (entry_price - exit_price) / entry_price * 100
-                else:
-                    pnl_pct = 0.0
-            else:
-                pnl_pct = 0.0
             dur_secs, dur_readable = self._holding_duration(
-                r.get("entry_time", ""), r.get("exit_time", ""),
+                r.get("entry_time"), r.get("exit_time"),
             )
             result.append({
                 "id": r.get("id"),
                 "symbol": r.get("symbol"),
                 "side": r.get("side"),
-                "entry_time": r.get("entry_time"),
+                "entry_time": r.get("entry_time") or "",
                 "entry_price": entry_price,
-                "exit_time": r.get("exit_time"),
+                "exit_time": r.get("exit_time") or "",
                 "exit_price": exit_price,
-                "size": r.get("size"),
-                "initial_stop_price": r.get("initial_stop_price"),
-                "pnl": r.get("pnl"),
-                "gross_pnl": r.get("gross_pnl"),
-                "net_pnl": r.get("net_pnl"),
-                "initial_risk": r.get("initial_risk"),
-                "r_multiple": r.get("pnl_r"),
-                "risk_reward_ratio": r.get("pnl_r"),
-                "r_validation_status": r.get("r_validation_status"),
-                "trade_hash": r.get("trade_hash"),
-                "stop_phase": r.get("stop_phase"),
-                "signal_candle_ts": r.get("signal_candle_ts"),
+                "size": sf(r.get("size")),
+                "initial_stop_price": sf(r.get("initial_stop_price")),
+                "pnl": sf(r.get("pnl")),
+                "gross_pnl": sf(r.get("gross_pnl")),
+                "net_pnl": sf(r.get("net_pnl")),
+                "initial_risk": sf(r.get("initial_risk")),
+                "r_multiple": sf(r.get("pnl_r")) if r.get("pnl_r") is not None else None,
+                "risk_reward_ratio": sf(r.get("pnl_r")) if r.get("pnl_r") is not None else None,
+                "r_validation_status": r.get("r_validation_status") or "",
+                "trade_hash": r.get("trade_hash") or "",
+                "stop_phase": r.get("stop_phase") or "",
+                "signal_candle_ts": r.get("signal_candle_ts") or "",
                 "pnl_percent": round(pnl_pct, 4),
                 "holding_duration_seconds": dur_secs,
                 "holding_duration_readable": dur_readable,
@@ -488,31 +497,35 @@ class EngineService:
 
     def get_trade_summary(self, symbol: str) -> dict[str, Any]:
         """Compute summary performance metrics from all closed trades."""
+        sf = self._safe_float
         rows = self._get_trade_repo().query(symbol=symbol, limit=10000)
         total = len(rows)
+        empty_summary: dict[str, Any] = {
+            "total_trades": 0,
+            "win_rate": 0.0,
+            "average_r": 0.0,
+            "expectancy_r": 0.0,
+            "total_net_pnl": 0.0,
+            "max_drawdown_r": 0.0,
+            "best_trade_r": 0.0,
+            "worst_trade_r": 0.0,
+        }
         if total == 0:
-            return {
-                "total_trades": 0,
-                "win_rate": 0.0,
-                "average_r": 0.0,
-                "expectancy_r": 0.0,
-                "total_net_pnl": 0.0,
-                "max_drawdown_r": 0.0,
-                "best_trade_r": 0.0,
-                "worst_trade_r": 0.0,
-            }
+            return empty_summary
         r_values: list[float] = []
         net_pnls: list[float] = []
         wins = 0
         for r in rows:
-            rv = r.get("pnl_r")
-            if rv is not None:
-                rv = float(rv)
+            raw_r = r.get("pnl_r")
+            if raw_r is not None:
+                rv = sf(raw_r)
                 r_values.append(rv)
                 if rv > 0:
                     wins += 1
-            np_val = r.get("net_pnl") or r.get("pnl") or 0
-            net_pnls.append(float(np_val))
+            np_raw = r.get("net_pnl")
+            if np_raw is None:
+                np_raw = r.get("pnl")
+            net_pnls.append(sf(np_raw))
         avg_r = sum(r_values) / len(r_values) if r_values else 0.0
         win_rate = (wins / len(r_values) * 100) if r_values else 0.0
         win_rs = [v for v in r_values if v > 0]

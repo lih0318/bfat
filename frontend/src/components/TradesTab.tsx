@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiFetch } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 
@@ -14,7 +14,7 @@ interface TradeSummary {
 }
 
 interface Trade {
-  id: number
+  id: number | null
   symbol: string
   side: string
   entry_time: string
@@ -24,11 +24,11 @@ interface Trade {
   size: number
   initial_stop_price: number
   pnl: number
-  gross_pnl: number
-  net_pnl: number
-  initial_risk: number
-  r_multiple: number
-  risk_reward_ratio: number
+  gross_pnl: number | null
+  net_pnl: number | null
+  initial_risk: number | null
+  r_multiple: number | null
+  risk_reward_ratio: number | null
   r_validation_status: string
   trade_hash: string
   stop_phase: string
@@ -74,6 +74,7 @@ export function TradesTab() {
   const [sortKey, setSortKey] = useState<SortKey>('exit_time')
   const [sortAsc, setSortAsc] = useState(false)
   const [expandedId, setExpandedId] = useState<number | null>(null)
+  const initialLoaded = useRef(false)
 
   const fetchSummary = useCallback(async () => {
     try {
@@ -95,10 +96,15 @@ export function TradesTab() {
 
   useEffect(() => {
     setLoading(true)
-    Promise.all([fetchSummary(), fetchTrades(0)]).finally(() => setLoading(false))
+    Promise.all([fetchSummary(), fetchTrades(0)]).finally(() => {
+      setLoading(false)
+      initialLoaded.current = true
+    })
   }, [fetchSummary, fetchTrades])
 
-  useEffect(() => { fetchTrades(page) }, [page, fetchTrades])
+  useEffect(() => {
+    if (initialLoaded.current) fetchTrades(page)
+  }, [page, fetchTrades])
 
   const sorted = [...trades].sort((a, b) => {
     let av: number, bv: number
@@ -186,22 +192,23 @@ export function TradesTab() {
                     아직 종료된 거래가 없습니다.
                   </td>
                 </tr>
-              ) : sorted.map(t => {
+              ) : sorted.map((t, idx) => {
                 const isLong = t.side?.toUpperCase() === 'LONG'
                 const rVal = t.r_multiple ?? 0
                 const pnlPct = t.pnl_percent ?? 0
                 const rColor = rVal > 0 ? 'text-emerald-400' : rVal < 0 ? 'text-rose-400' : ''
                 const pnlColor2 = pnlPct > 0 ? 'text-emerald-400' : pnlPct < 0 ? 'text-rose-400' : ''
-                const isExpanded = expandedId === t.id
+                const rowKey = t.id ?? idx
+                const isExpanded = expandedId === (t.id ?? idx)
                 const validOk = t.r_validation_status === 'OK'
                 return (
-                  <tr key={t.id} className="group">
+                  <tr key={rowKey} className="group">
                     <td colSpan={9} className="p-0">
                       <div
                         className={`cursor-pointer border-l-[3px] transition-colors hover:bg-[var(--bg-elevated)]/60 ${
                           isLong ? 'border-l-emerald-500/60' : 'border-l-rose-500/60'
                         } ${isExpanded ? 'bg-[var(--bg-elevated)]/40' : ''}`}
-                        onClick={() => setExpandedId(isExpanded ? null : t.id)}
+                        onClick={() => setExpandedId(isExpanded ? null : (t.id ?? idx))}
                       >
                         <div className="grid grid-cols-9 items-center">
                           <div className="px-4 py-3">
