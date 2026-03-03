@@ -236,3 +236,10 @@ class BinanceExecutionClient:
             if isinstance(p, dict) and p.get("symbol") == symbol:
                 return p
         return {}
+
+    def get_open_orders(self, symbol: str) -> list[dict]:
+        """Fetch all open orders for symbol. Returns list of order dicts."""
+        data = self._request("GET", "/fapi/v1/openOrders", {"symbol": symbol})
+        if not isinstance(data, list):
+            return []
+        return data

@@ -120,6 +120,16 @@ class StateMachine:
         self._position = None
         self._pending_signal = None
 
+    def restore_position(self, position: Position) -> None:
+        """FLAT → OPEN directly. Used to hydrate state from an external source (e.g., Binance sync on startup)."""
+        if self._state != PositionState.FLAT:
+            raise ValueError(
+                f"Cannot restore position in {self._state.value}, must be FLAT"
+            )
+        self._state = PositionState.OPEN
+        self._position = position
+        self._pending_signal = None
+
     def on_exit_filled(self) -> None:
         """CLOSING → FLAT."""
         if self._state != PositionState.CLOSING:

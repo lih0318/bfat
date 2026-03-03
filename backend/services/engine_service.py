@@ -3,15 +3,18 @@
 import asyncio
 import logging
 import time
-from typing import Any, Callable, Optional
+from datetime import datetime, timezone
+from typing import Any, Optional
 
 from app.config.settings import Settings
 from app.core.database import DatabaseFactory
 from app.core.engine import BFATEngine
-from app.core.execution import BinanceExecutionClient
+from app.core.execution import BinanceExecutionClient, _generate_client_order_id
 from app.core.market.binance_market_stream import BinanceMarketStream
 from app.core.risk import KillSwitch, RiskManager
 from app.core.ws.binance_user_stream import BinanceUserStream
+from app.domain.enums import Side, StopPhase
+from app.domain.position import Position
 from app.domain.state_machine import StateMachine
 from app.domain.strategy_engine import StrategyEngine
 from app.persistence import create_persistence
@@ -124,13 +127,45 @@ class EngineService:
             logger.warning("Equity fetch failed: %s", e)
             return self._equity_value
 
+    def _fetch_binance_position(self) -> dict[str, Any] | None:
+        """Query Binance for a live position on the configured symbol. Returns pos dict or None."""
+        if not self._binance_account.is_configured():
+            return None
+        try:
+            acct = self._binance_account.account()
+            for p in acct.get("positions", []):
+                if p.get("symbol") == self._settings.bfat_symbol:
+                    amt = float(p.get("positionAmt", 0))
+                    if amt == 0:
+                        return None
+                    entry_price = float(p.get("entryPrice", 0))
+                    unrealized = float(p.get("unrealizedProfit", 0))
+                    return {
+                        "symbol": self._settings.bfat_symbol,
+                        "side": "long" if amt > 0 else "short",
+                        "size": abs(amt),
+                        "entry_price": entry_price,
+                        "stop_price": 0,
+                        "initial_stop_price": 0,
+                        "stop_phase": "unknown",
+                        "entry_time": "",
+                        "correlation_id": "binance_live",
+                        "unrealized_pnl": unrealized,
+                        "source": "binance",
+                    }
+            return None
+        except Exception as e:
+            logger.debug("Binance live position fetch failed: %s", e)
+            return None
+
     def _get_status(self) -> dict[str, Any]:
         """Build status dict for API/WebSocket."""
         equity = self._equity_provider()
         if self._engine is None:
+            live_pos = self._fetch_binance_position()
             return {
                 "engine_state": "stopped",
-                "position": None,
+                "position": live_pos,
                 "last_signal": None,
                 "current_stop_price": None,
                 "r_multiple": None,
@@ -155,6 +190,10 @@ class EngineService:
                 "entry_time": pos.entry_time,
                 "correlation_id": pos.correlation_id,
             }
+        if pos_dict is None:
+            live_pos = self._fetch_binance_position()
+            if live_pos is not None:
+                pos_dict = live_pos
         last_signal = None
         r_multiple = None
         r_validation_status = None
@@ -188,12 +227,97 @@ class EngineService:
             "error": self._critical_error,
         }
 
+    def _sync_binance_position(self) -> None:
+        """On engine start, check Binance for an existing open position and restore into StateMachine."""
+        if self._engine is None:
+            return
+        symbol = self._settings.bfat_symbol
+        exec_client = self._engine._execution
+        sm = self._engine._state_machine
+        try:
+            pos_data = exec_client.get_position(symbol)
+            if not pos_data:
+                return
+            pos_amt = float(pos_data.get("positionAmt", 0))
+            if pos_amt == 0:
+                return
+            entry_price = float(pos_data.get("entryPrice", 0))
+            if entry_price <= 0:
+                return
+            side = Side.LONG if pos_amt > 0 else Side.SHORT
+            size = abs(pos_amt)
+
+            stop_order_id: str | None = None
+            stop_price = entry_price
+            try:
+                open_orders = exec_client.get_open_orders(symbol)
+                for order in open_orders:
+                    if order.get("type") in ("STOP_MARKET", "STOP") and order.get("status") == "NEW":
+                        stop_order_id = str(order["orderId"])
+                        sp = float(order.get("stopPrice", 0))
+                        if sp > 0:
+                            stop_price = sp
+                        break
+            except Exception as e:
+                logger.warning("Failed to fetch open orders during sync: %s", e)
+
+            if stop_order_id is None:
+                safety_pct = 0.015
+                if side == Side.LONG:
+                    stop_price = round(entry_price * (1 - safety_pct), 2)
+                else:
+                    stop_price = round(entry_price * (1 + safety_pct), 2)
+                try:
+                    stop_resp = exec_client.place_stop_market_order(
+                        symbol, side, size, stop_price,
+                        _generate_client_order_id("bfat_restore_stop"),
+                    )
+                    stop_order_id = str(stop_resp.get("orderId", ""))
+                    logger.info("Placed safety stop for restored position: %s @ %.2f", stop_order_id, stop_price)
+                except Exception as e:
+                    logger.warning(
+                        "Cannot fully restore position: stop order placement failed (%s). "
+                        "Position will still appear via Binance fallback.",
+                        e,
+                    )
+                    return
+
+            update_ts = pos_data.get("updateTime")
+            if update_ts:
+                try:
+                    entry_time = datetime.fromtimestamp(int(update_ts) / 1000, tz=timezone.utc).isoformat(timespec="seconds") + "Z"
+                except (ValueError, TypeError, OSError):
+                    entry_time = ""
+            else:
+                entry_time = ""
+
+            position = Position(
+                symbol=symbol,
+                side=side,
+                size=size,
+                entry_price=entry_price,
+                stop_price=stop_price,
+                initial_stop_price=stop_price,
+                stop_phase=StopPhase.INITIAL,
+                entry_time=entry_time,
+                correlation_id="restored_from_binance",
+            )
+            sm.restore_position(position)
+            self._engine._current_stop_order_id = stop_order_id
+            logger.info(
+                "Restored Binance position: %s %s %.6f @ %.2f, stop=%.2f (order=%s)",
+                side.value, symbol, size, entry_price, stop_price, stop_order_id,
+            )
+        except Exception as e:
+            logger.warning("Binance position sync failed: %s", e)
+
     async def _run(self) -> None:
         """Background: start streams and run until stopped."""
         self._critical_error = None
         _, _, system_log_repo = create_persistence(self._db)
         try:
             self._engine = self._build_engine()
+            self._sync_binance_position()
             market = BinanceMarketStream(
                 symbol=self._settings.bfat_symbol,
                 engine=self._engine,
