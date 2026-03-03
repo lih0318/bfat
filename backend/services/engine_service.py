@@ -399,31 +399,148 @@ class EngineService:
         """Return current status."""
         return self._get_status()
 
-    def get_trades(self, symbol: str, limit: int = 20, offset: int = 0) -> list[dict[str, Any]]:
-        """Return closed trades with stored r_multiple from DB only."""
-        trade_repo = None
+    def _get_trade_repo(self):
         if self._engine is not None:
-            trade_repo = getattr(self._engine, "_trade_repo", None)
-        if trade_repo is None:
-            trade_repo, _, _ = create_persistence(self._db)
-        rows = trade_repo.query(symbol=symbol, limit=limit, offset=offset)
-        return [
-            {
+            repo = getattr(self._engine, "_trade_repo", None)
+            if repo is not None:
+                return repo
+        repo, _, _ = create_persistence(self._db)
+        return repo
+
+    @staticmethod
+    def _holding_duration(entry_ts: str, exit_ts: str) -> tuple[int, str]:
+        """Return (seconds, readable) for holding duration between ISO timestamps."""
+        try:
+            fmt1 = "%Y-%m-%dT%H:%M:%SZ"
+            fmt2 = "%Y-%m-%dT%H:%M:%S"
+            for fmt in (fmt1, fmt2):
+                try:
+                    t_entry = datetime.strptime(entry_ts, fmt)
+                    break
+                except ValueError:
+                    t_entry = None
+            for fmt in (fmt1, fmt2):
+                try:
+                    t_exit = datetime.strptime(exit_ts, fmt)
+                    break
+                except ValueError:
+                    t_exit = None
+            if t_entry is None or t_exit is None:
+                return 0, "–"
+            secs = int((t_exit - t_entry).total_seconds())
+            if secs < 0:
+                secs = 0
+            h, rem = divmod(secs, 3600)
+            m, _ = divmod(rem, 60)
+            if h > 0:
+                readable = f"{h}h {m}m"
+            else:
+                readable = f"{m}m"
+            return secs, readable
+        except Exception:
+            return 0, "–"
+
+    def get_trades(self, symbol: str, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+        """Return closed trades with computed display fields from DB only."""
+        rows = self._get_trade_repo().query(symbol=symbol, limit=limit, offset=offset)
+        result: list[dict[str, Any]] = []
+        for r in rows:
+            entry_price = r.get("entry_price") or 0
+            exit_price = r.get("exit_price") or 0
+            side = (r.get("side") or "").upper()
+            if entry_price > 0:
+                if side == "LONG":
+                    pnl_pct = (exit_price - entry_price) / entry_price * 100
+                elif side == "SHORT":
+                    pnl_pct = (entry_price - exit_price) / entry_price * 100
+                else:
+                    pnl_pct = 0.0
+            else:
+                pnl_pct = 0.0
+            dur_secs, dur_readable = self._holding_duration(
+                r.get("entry_time", ""), r.get("exit_time", ""),
+            )
+            result.append({
                 "id": r.get("id"),
                 "symbol": r.get("symbol"),
                 "side": r.get("side"),
                 "entry_time": r.get("entry_time"),
-                "entry_price": r.get("entry_price"),
+                "entry_price": entry_price,
                 "exit_time": r.get("exit_time"),
-                "exit_price": r.get("exit_price"),
+                "exit_price": exit_price,
                 "size": r.get("size"),
                 "initial_stop_price": r.get("initial_stop_price"),
                 "pnl": r.get("pnl"),
+                "gross_pnl": r.get("gross_pnl"),
+                "net_pnl": r.get("net_pnl"),
+                "initial_risk": r.get("initial_risk"),
                 "r_multiple": r.get("pnl_r"),
+                "risk_reward_ratio": r.get("pnl_r"),
                 "r_validation_status": r.get("r_validation_status"),
+                "trade_hash": r.get("trade_hash"),
+                "stop_phase": r.get("stop_phase"),
+                "signal_candle_ts": r.get("signal_candle_ts"),
+                "pnl_percent": round(pnl_pct, 4),
+                "holding_duration_seconds": dur_secs,
+                "holding_duration_readable": dur_readable,
+            })
+        return result
+
+    def get_trade_summary(self, symbol: str) -> dict[str, Any]:
+        """Compute summary performance metrics from all closed trades."""
+        rows = self._get_trade_repo().query(symbol=symbol, limit=10000)
+        total = len(rows)
+        if total == 0:
+            return {
+                "total_trades": 0,
+                "win_rate": 0.0,
+                "average_r": 0.0,
+                "expectancy_r": 0.0,
+                "total_net_pnl": 0.0,
+                "max_drawdown_r": 0.0,
+                "best_trade_r": 0.0,
+                "worst_trade_r": 0.0,
             }
-            for r in rows
-        ]
+        r_values: list[float] = []
+        net_pnls: list[float] = []
+        wins = 0
+        for r in rows:
+            rv = r.get("pnl_r")
+            if rv is not None:
+                rv = float(rv)
+                r_values.append(rv)
+                if rv > 0:
+                    wins += 1
+            np_val = r.get("net_pnl") or r.get("pnl") or 0
+            net_pnls.append(float(np_val))
+        avg_r = sum(r_values) / len(r_values) if r_values else 0.0
+        win_rate = (wins / len(r_values) * 100) if r_values else 0.0
+        win_rs = [v for v in r_values if v > 0]
+        lose_rs = [v for v in r_values if v <= 0]
+        avg_win = sum(win_rs) / len(win_rs) if win_rs else 0.0
+        avg_loss = sum(lose_rs) / len(lose_rs) if lose_rs else 0.0
+        wr = win_rate / 100
+        expectancy = wr * avg_win + (1 - wr) * avg_loss
+        cumulative = 0.0
+        peak = 0.0
+        max_dd = 0.0
+        for rv in r_values:
+            cumulative += rv
+            if cumulative > peak:
+                peak = cumulative
+            dd = peak - cumulative
+            if dd > max_dd:
+                max_dd = dd
+        return {
+            "total_trades": total,
+            "win_rate": round(win_rate, 2),
+            "average_r": round(avg_r, 4),
+            "expectancy_r": round(expectancy, 4),
+            "total_net_pnl": round(sum(net_pnls), 4),
+            "max_drawdown_r": round(max_dd, 4),
+            "best_trade_r": round(max(r_values), 4) if r_values else 0.0,
+            "worst_trade_r": round(min(r_values), 4) if r_values else 0.0,
+        }
 
     def get_insight(self) -> dict[str, Any]:
         """Return last strategy evaluation + regime classifier data for insight API."""

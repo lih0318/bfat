@@ -6,6 +6,7 @@ import { ControlPanel } from './ControlPanel'
 import { InsightTab } from './InsightTab'
 import { LogsPanel } from './LogsPanel'
 import { PositionCard, type PositionData } from './PositionCard'
+import { TradesTab } from './TradesTab'
 
 interface StatusData {
   engine_state: string
@@ -25,7 +26,7 @@ interface InsightData {
   regime: string
 }
 
-type TabId = 'dashboard' | 'insight' | 'logs' | 'chart'
+type TabId = 'dashboard' | 'insight' | 'trades' | 'logs' | 'chart'
 
 export function Dashboard() {
   const { accessToken, logout, username } = useAuth()
@@ -302,7 +303,7 @@ export function Dashboard() {
 
       <nav className="border-b border-[var(--border)] bg-[var(--bg-elevated)]">
         <div className="mx-auto flex max-w-6xl gap-0">
-          {(['dashboard', 'insight', 'logs', 'chart'] as const).map((tab) => (
+          {(['dashboard', 'insight', 'trades', 'logs', 'chart'] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -371,6 +372,12 @@ export function Dashboard() {
         {activeTab === 'insight' && (
           <div className="space-y-4">
             <InsightTab />
+          </div>
+        )}
+
+        {activeTab === 'trades' && (
+          <div className="space-y-4">
+            <TradesTab />
           </div>
         )}
 

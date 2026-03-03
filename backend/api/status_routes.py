@@ -54,10 +54,10 @@ async def get_position(
 async def get_trades(
     request: Request,
     _: str = Depends(get_current_user),
-    limit: int = 20,
+    limit: int = 50,
     offset: int = 0,
 ):
-    """Return closed trades with stored r_multiple from DB only."""
+    """Return closed trades with computed display fields from DB only."""
     svc = getattr(request.app.state, "engine_service", None)
     if svc is None or not hasattr(svc, "get_trades"):
         return []
@@ -66,6 +66,30 @@ async def get_trades(
         return svc.get_trades(symbol=symbol, limit=limit, offset=offset)
     except Exception:
         return []
+
+
+@router.get("/trades/summary")
+async def get_trade_summary(
+    request: Request,
+    _: str = Depends(get_current_user),
+):
+    """Return performance summary metrics computed from closed trades."""
+    svc = getattr(request.app.state, "engine_service", None)
+    if svc is None or not hasattr(svc, "get_trade_summary"):
+        return {
+            "total_trades": 0, "win_rate": 0.0, "average_r": 0.0,
+            "expectancy_r": 0.0, "total_net_pnl": 0.0,
+            "max_drawdown_r": 0.0, "best_trade_r": 0.0, "worst_trade_r": 0.0,
+        }
+    try:
+        symbol = getattr(request.app.state.settings, "bfat_symbol", "BTCUSDT")
+        return svc.get_trade_summary(symbol=symbol)
+    except Exception:
+        return {
+            "total_trades": 0, "win_rate": 0.0, "average_r": 0.0,
+            "expectancy_r": 0.0, "total_net_pnl": 0.0,
+            "max_drawdown_r": 0.0, "best_trade_r": 0.0, "worst_trade_r": 0.0,
+        }
 
 
 def _default_insight():
