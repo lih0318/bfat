@@ -12,6 +12,7 @@ interface StatusData {
   position: Record<string, unknown> | null
   last_signal: Record<string, string> | null
   current_stop_price: number | null
+  take_profit: number | null
   r_multiple: number | null
   r_validation_status: string | null
   system_health: string
@@ -188,8 +189,6 @@ export function Dashboard() {
     status?.r_multiple != null ? Number(status.r_multiple) : null
   const rValidationStatus = status?.r_validation_status ?? null
 
-  const formatR = (r: number | null) => (r != null ? `${r.toFixed(2)}R` : '--')
-
   const rBadgeClasses: Record<string, string> = {
     OK: 'bg-[var(--positive)]/20 text-[var(--positive)]',
     WARNING: 'bg-yellow-500/20 text-yellow-400',
@@ -348,22 +347,9 @@ export function Dashboard() {
               <PositionCard
                 position={pos ?? null}
                 currentStopPrice={status?.current_stop_price ?? null}
-                rMultiple={null}
+                takeProfit={status?.take_profit ?? null}
+                rMultiple={rMultiple}
               />
-            </div>
-            <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4 md:p-5 shadow-[var(--shadow)] ring-1 ring-white/5 backdrop-blur-sm">
-              <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-[var(--text-muted)]">
-                Stop Level
-              </h3>
-              <p className="text-lg font-medium">{status?.current_stop_price ?? pos?.stop_price ?? '–'}</p>
-            </div>
-            <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4 md:p-5 shadow-[var(--shadow)] ring-1 ring-white/5 backdrop-blur-sm">
-              <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-[var(--text-muted)]">
-                R Multiple
-              </h3>
-              <p className={`text-lg font-medium ${rMultiple != null ? (rMultiple >= 0 ? 'text-[var(--positive)]' : 'text-[var(--negative)]') : ''}`}>
-                {formatR(rMultiple)}
-              </p>
             </div>
             <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4 md:p-5 shadow-[var(--shadow)] ring-1 ring-white/5 backdrop-blur-sm">
               <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-[var(--text-muted)]">

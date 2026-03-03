@@ -214,11 +214,13 @@ class EngineService:
         system_health = "HEALTHY"
         if r_validation_status in ("CRITICAL", "CRITICAL_OUTLIER"):
             system_health = "DEGRADED"
+        take_profit = getattr(self._engine, "_current_take_profit", None)
         return {
             "engine_state": sm.state.value,
             "position": pos_dict,
             "last_signal": last_signal,
             "current_stop_price": pos.stop_price if pos else None,
+            "take_profit": take_profit,
             "r_multiple": r_multiple,
             "r_validation_status": r_validation_status,
             "system_health": system_health,

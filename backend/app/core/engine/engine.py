@@ -161,6 +161,7 @@ class BFATEngine:
         self._system_log = system_log_repository
         self._symbol = symbol
         self._current_stop_order_id: str | None = None
+        self._current_take_profit: float | None = None
         self._last_signal_candle_ts: str = ""
 
     def _check_state_consistency(self) -> None:
@@ -323,6 +324,7 @@ class BFATEngine:
                         "State transition failed after entry; position flattened"
                     ) from e
                 self._last_signal_candle_ts = signal.signal_candle_ts
+                self._current_take_profit = signal.take_profit
                 self._check_state_consistency()
             except RuntimeError:
                 raise
@@ -563,4 +565,5 @@ class BFATEngine:
         except Exception as e:
             raise RuntimeError("State transition failed") from e
         self._current_stop_order_id = None
+        self._current_take_profit = None
         self._check_state_consistency()
