@@ -66,17 +66,27 @@ export function Dashboard() {
       }
       ws.onclose = () => {
         if (cancelled) return
+        ws = null
         failures++
         if (failures >= MAX_FAILURES) return
         const delay = Math.min(3000 * Math.pow(2, failures - 1), 30000)
         reconnectTimer = setTimeout(connect, delay)
       }
+      ws.onerror = () => { /* avoid uncaught in console; reconnect handled in onclose */ }
     }
     connect()
     return () => {
       cancelled = true
-      if (reconnectTimer) clearTimeout(reconnectTimer)
-      ws?.close()
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer)
+        reconnectTimer = null
+      }
+      if (ws) {
+        ws.onclose = null
+        ws.onerror = null
+        ws.close()
+        ws = null
+      }
     }
   }, [wsUrl])
 

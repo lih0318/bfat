@@ -16,6 +16,12 @@ export default defineConfig({
       '/ws': {
         target: apiTarget.replace('http', 'ws'),
         ws: true,
+        configure: (proxy) => {
+          proxy.on('error', (err: NodeJS.ErrnoException) => {
+            if (err.code === 'EPIPE' || err.code === 'ECONNRESET') return
+            console.error('[vite] ws proxy error:', err.message)
+          })
+        },
       },
     },
   },
