@@ -13,7 +13,7 @@ from app.domain.signal import Signal
 # ─── Fixed parameters ──────────────────────────────────────────────
 RANGE_LOOKBACK = 20
 RSI_PERIOD = 14
-ENTRY_THRESHOLD = 0.0015
+ENTRY_THRESHOLD = 0.0025
 STOP_BUFFER = 0.002
 RSI_LONG = 38
 RSI_SHORT = 62
@@ -132,7 +132,7 @@ class RangeStrategy:
         near_high = high >= high_threshold  # bar touched or went above level at some point
         rsi_oversold = rsi is not None and rsi < RSI_LONG
         rsi_overbought = rsi is not None and rsi > RSI_SHORT
-        vol_quiet = vol_z is not None and vol_z <= 0
+        vol_quiet = vol_z is not None and vol_z < 1.0
 
         long_signal = near_low and rsi_oversold and vol_quiet
         short_signal = near_high and rsi_overbought and vol_quiet
@@ -145,7 +145,7 @@ class RangeStrategy:
             {"label": "Touch range high (SHORT)", "required": f"high ≥ {high_threshold:.2f}", "actual": f"{high:.2f}", "met": near_high},
             {"label": "RSI oversold (LONG)", "required": f"< {RSI_LONG}", "actual": rsi_str, "met": rsi_oversold},
             {"label": "RSI overbought (SHORT)", "required": f"> {RSI_SHORT}", "actual": rsi_str, "met": rsi_overbought},
-            {"label": "Volume Z ≤ 0 (quiet)", "required": "≤ 0", "actual": vol_z_str, "met": vol_quiet},
+            {"label": "Volume Z < 1.0 (no spike)", "required": "< 1.0", "actual": vol_z_str, "met": vol_quiet},
         ]
 
         if long_signal:
@@ -197,7 +197,7 @@ class RangeStrategy:
         elif near_high and not rsi_overbought:
             reasoning.append(f"Near high but RSI {rsi_str} <= {RSI_SHORT}")
         if not vol_quiet:
-            reasoning.append(f"Volume Z-score {vol_z_str} > 0 (need quiet)")
+            reasoning.append(f"Volume Z-score {vol_z_str} >= 1.0 (need < 1.0, no spike)")
         self._store_evaluation(
             range_high, range_low, range_mid, rsi, vol_z, close, reasoning,
             entry_conditions=entry_conds,

@@ -137,8 +137,8 @@ class BreakoutStrategy:
     BREAKOUT_LOOKBACK = 20
     BREAKOUT_THRESHOLD = 0.001
     VOLUME_LOOKBACK = 20
-    VOLUME_ZSCORE_LONG_THRESHOLD = -0.3   # long breakout requires closer-to-average participation
-    VOLUME_ZSCORE_SHORT_THRESHOLD = -0.7  # short breakdown may proceed under thinner liquidity
+    VOLUME_ZSCORE_LONG_THRESHOLD = 1.2    # long breakout requires volume expansion for reliability
+    VOLUME_ZSCORE_SHORT_THRESHOLD = 1.0   # short breakdown also requires volume expansion
     OVEREXTENSION_LOOKBACK = 10
     ATR_PERIOD = 14
     ATR_OVEREXTENSION = 2.5
