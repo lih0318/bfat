@@ -4,7 +4,7 @@ Enters LONG near range low, SHORT near range high, with RSI and volume
 Z-score confirmation.  All rolling windows are past-only (no lookahead).
 """
 
-from typing import Optional
+from typing import Any, Optional
 
 from app.domain.enums import Side
 from app.domain.signal import Signal
@@ -84,6 +84,8 @@ class RangeStrategy:
         vol_z: Optional[float],
         close_price: float,
         engine_reasoning: list[str],
+        *,
+        entry_conditions: Optional[list[dict[str, Any]]] = None,
     ) -> None:
         self._last_evaluation = {
             "range_high": round(range_high, 4),
@@ -94,6 +96,8 @@ class RangeStrategy:
             "close_price": round(close_price, 4),
             "engine_reasoning": engine_reasoning,
         }
+        if entry_conditions is not None:
+            self._last_evaluation["entry_conditions"] = entry_conditions
 
     def evaluate(self, candles: list[dict]) -> Optional[Signal]:
         """Evaluate closed candles.  Returns Signal(LONG/SHORT) or None."""
@@ -132,6 +136,14 @@ class RangeStrategy:
         rsi_str = f"{rsi:.2f}" if rsi is not None else "N/A"
         vol_z_str = f"{vol_z:.2f}" if vol_z is not None else "N/A"
 
+        entry_conds = [
+            {"label": "Near range low (LONG)", "required": f"close ≤ {range_low * (1 + ENTRY_THRESHOLD):.2f}", "actual": f"{close:.2f}", "met": near_low},
+            {"label": "Near range high (SHORT)", "required": f"close ≥ {range_high * (1 - ENTRY_THRESHOLD):.2f}", "actual": f"{close:.2f}", "met": near_high},
+            {"label": "RSI oversold (LONG)", "required": f"< {RSI_LONG}", "actual": rsi_str, "met": rsi_oversold},
+            {"label": "RSI overbought (SHORT)", "required": f"> {RSI_SHORT}", "actual": rsi_str, "met": rsi_overbought},
+            {"label": "Volume Z ≤ 0 (quiet)", "required": "≤ 0", "actual": vol_z_str, "met": vol_quiet},
+        ]
+
         if long_signal:
             stop = range_low * (1 - STOP_BUFFER)
             tp = range_mid
@@ -141,6 +153,7 @@ class RangeStrategy:
                     f"Range [{range_low:.2f} – {range_high:.2f}]",
                     f"Range bounce LONG: close {close:.2f} near low, RSI {rsi_str}, vol_z {vol_z_str}",
                 ],
+                entry_conditions=entry_conds,
             )
             return Signal(
                 symbol=self._symbol,
@@ -182,5 +195,6 @@ class RangeStrategy:
             reasoning.append(f"Volume Z-score {vol_z_str} > 0 (need quiet)")
         self._store_evaluation(
             range_high, range_low, range_mid, rsi, vol_z, close, reasoning,
+            entry_conditions=entry_conds,
         )
         return None

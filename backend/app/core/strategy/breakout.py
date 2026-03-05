@@ -1,6 +1,6 @@
 """15m BB compression + breakout + volume + overextension strategy."""
 
-from typing import Optional
+from typing import Any, Optional
 
 from app.domain.enums import Side
 from app.domain.signal import Signal
@@ -162,6 +162,7 @@ class BreakoutStrategy:
         *,
         bb_width_z: Optional[float] = None,
         compression_model: Optional[str] = None,
+        entry_conditions: Optional[list[dict[str, Any]]] = None,
     ) -> None:
         """Store last evaluation for insight API."""
         vol_score = (atr_value / close_price) * 100.0 if close_price > 0 else 0.0
@@ -177,6 +178,8 @@ class BreakoutStrategy:
             self._last_evaluation["bb_width_z"] = round(bb_width_z, 4)
         if compression_model is not None:
             self._last_evaluation["compression_model"] = compression_model
+        if entry_conditions is not None:
+            self._last_evaluation["entry_conditions"] = entry_conditions
 
     def evaluate(self, candles: list[dict]) -> Optional[Signal]:
         """
@@ -230,10 +233,15 @@ class BreakoutStrategy:
             and bb_width_pct < 60
         )
         if not compression:
+            conds = [
+                {"label": "BB width Z (compression)", "required": "< -0.8", "actual": f"{current_z:.2f}", "met": current_z < -0.8},
+                {"label": "BB width %ile (compression)", "required": "< 60%", "actual": f"{bb_width_pct:.1f}%" if bb_width_pct is not None else "–", "met": bb_width_pct is not None and bb_width_pct < 60},
+            ]
             self._store_evaluation(
                 bb_width_pct, 0.0, 0.0, "Ranging",
                 [f"BB width Z-score {current_z:.2f} (need < -0.8) or percentile >= 60 → no compression"],
                 close_price, bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
+                entry_conditions=conds,
             )
             return None
 
@@ -243,9 +251,15 @@ class BreakoutStrategy:
             return None
         current_atr = atr_vals[-1]
         if current_atr <= 0:
+            conds = [
+                {"label": "BB width Z (compression)", "required": "< -0.8", "actual": f"{current_z:.2f}", "met": True},
+                {"label": "BB width %ile (compression)", "required": "< 60%", "actual": f"{bb_width_pct:.1f}%" if bb_width_pct is not None else "–", "met": bb_width_pct is not None and bb_width_pct < 60},
+                {"label": "ATR > 0", "required": "> 0", "actual": f"{current_atr:.4f}", "met": False},
+            ]
             self._store_evaluation(
                 bb_width_pct, 0.0, 0.0, "Ranging", ["ATR invalid"],
                 close_price, bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
+                entry_conditions=conds,
             )
             return None
         movement = _last_n_candles_movement(candles, self.OVEREXTENSION_LOOKBACK)
@@ -265,8 +279,20 @@ class BreakoutStrategy:
         breakout_long = close > high_20 * (1 + self.BREAKOUT_THRESHOLD)
         breakout_short = close < low_20 * (1 - self.BREAKOUT_THRESHOLD)
 
-        # ── 5. Single boolean entry mask ──
         vol_z_safe = vol_z if vol_z is not None else float("-inf")
+        vol_z_str = f"{vol_z:.2f}" if vol_z is not None else "N/A"
+        entry_conds_full = [
+            {"label": "BB width Z (compression)", "required": "< -0.8", "actual": f"{current_z:.2f}", "met": True},
+            {"label": "BB width %ile (compression)", "required": "< 60%", "actual": f"{bb_width_pct:.1f}%" if bb_width_pct is not None else "–", "met": bb_width_pct is not None and bb_width_pct < 60},
+            {"label": "ATR > 0", "required": "> 0", "actual": f"{current_atr:.4f}", "met": current_atr > 0},
+            {"label": "Not overextended", "required": f"movement < {overext_threshold:.1f}", "actual": f"{movement:.2f}", "met": not overextended},
+            {"label": "Breakout LONG", "required": "close > 20-bar high", "actual": "yes" if breakout_long else "no", "met": breakout_long},
+            {"label": "Breakout SHORT", "required": "close < 20-bar low", "actual": "yes" if breakout_short else "no", "met": breakout_short},
+            {"label": "Volume Z (LONG)", "required": f"≥ {self.VOLUME_ZSCORE_LONG_THRESHOLD}", "actual": vol_z_str, "met": vol_z is not None and vol_z_safe >= self.VOLUME_ZSCORE_LONG_THRESHOLD},
+            {"label": "Volume Z (SHORT)", "required": f"≥ {self.VOLUME_ZSCORE_SHORT_THRESHOLD}", "actual": vol_z_str, "met": vol_z is not None and vol_z_safe >= self.VOLUME_ZSCORE_SHORT_THRESHOLD},
+        ]
+
+        # ── 5. Single boolean entry mask ──
         long_signal = (
             breakout_long
             and not overextended
@@ -282,13 +308,13 @@ class BreakoutStrategy:
 
         # ── Insight reasoning ──
         reasoning: list[str] = [f"BB width Z-score {current_z:.2f} → compression"]
-        vol_z_str = f"{vol_z:.2f}" if vol_z is not None else "N/A"
 
         if overextended:
             reasoning.append(f"Movement {movement:.2f} >= overextension {overext_threshold:.2f} → filtered")
             self._store_evaluation(
                 bb_width_pct, current_atr, volume_ratio, "High Volatility", reasoning,
                 close_price, bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
+                entry_conditions=entry_conds_full,
             )
             return None
 
@@ -297,6 +323,7 @@ class BreakoutStrategy:
             self._store_evaluation(
                 bb_width_pct, current_atr, volume_ratio, "Trending", reasoning,
                 close_price, bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
+                entry_conditions=entry_conds_full,
             )
             return Signal(symbol=self._symbol, side=Side.LONG, signal_time=signal_time, signal_candle_ts=signal_time)
 
@@ -305,6 +332,7 @@ class BreakoutStrategy:
             self._store_evaluation(
                 bb_width_pct, current_atr, volume_ratio, "Trending", reasoning,
                 close_price, bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
+                entry_conditions=entry_conds_full,
             )
             return Signal(symbol=self._symbol, side=Side.SHORT, signal_time=signal_time, signal_candle_ts=signal_time)
 
@@ -322,5 +350,6 @@ class BreakoutStrategy:
         self._store_evaluation(
             bb_width_pct, current_atr, volume_ratio, "Ranging", reasoning,
             close_price, bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
+            entry_conditions=entry_conds_full,
         )
         return None

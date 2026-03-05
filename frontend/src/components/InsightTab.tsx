@@ -27,6 +27,13 @@ interface RegimeClassifier {
   score?: number | null
 }
 
+interface EntryCondition {
+  label: string
+  required: string
+  actual: string
+  met: boolean
+}
+
 interface InsightData {
   regime: string
   active_strategy: string
@@ -46,6 +53,7 @@ interface InsightData {
   close_price?: number | null
   bb_width_z?: number | null
   engine_reasoning: string[]
+  entry_conditions?: EntryCondition[]
   trend_reference?: TrendRef
   range_reference?: RangeRef
   regime_classifier?: RegimeClassifier
@@ -218,6 +226,41 @@ export function InsightTab() {
           </div>
         )}
       </div>
+
+      {/* ── Entry conditions (satisfied / not satisfied) ── */}
+      {data?.entry_conditions && data.entry_conditions.length > 0 && (
+        <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-6 shadow-[var(--shadow)] ring-1 ring-white/5 backdrop-blur-sm">
+          <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Entry conditions</p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-[var(--border)] text-left text-[11px] uppercase tracking-wider text-[var(--text-muted)]">
+                  <th className="pb-2 pr-3 font-medium">Status</th>
+                  <th className="pb-2 pr-3 font-medium">Condition</th>
+                  <th className="pb-2 pr-3 font-medium">Required</th>
+                  <th className="pb-2 font-medium">Actual</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.entry_conditions.map((c, i) => (
+                  <tr key={i} className={`border-b border-[var(--border)]/50 ${c.met ? 'text-[var(--positive)]' : 'text-[var(--text-muted)]'}`}>
+                    <td className="py-2.5 pr-3">
+                      {c.met ? (
+                        <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-[var(--positive)]/15 text-[var(--positive)]" aria-label="Met">✓</span>
+                      ) : (
+                        <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-[var(--negative)]/15 text-[var(--negative)]" aria-label="Not met">✗</span>
+                      )}
+                    </td>
+                    <td className="py-2.5 pr-3 font-medium">{c.label}</td>
+                    <td className="py-2.5 pr-3 tabular-nums text-[var(--text-muted)]">{c.required}</td>
+                    <td className="py-2.5 tabular-nums">{c.actual}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* ── Engine Reasoning ──────────────── */}
       {data?.engine_reasoning && data.engine_reasoning.length > 0 && (

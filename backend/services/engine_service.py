@@ -614,4 +614,6 @@ class EngineService:
             result["trend_reference"] = details["trend_reference"]
         if "range_reference" in details:
             result["range_reference"] = details["range_reference"]
+        if "entry_conditions" in details:
+            result["entry_conditions"] = details["entry_conditions"]
         return result
