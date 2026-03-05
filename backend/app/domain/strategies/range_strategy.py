@@ -118,14 +118,18 @@ class RangeStrategy:
 
         cur = candles[-1]
         close = cur["close"]
+        high = cur["high"]
+        low = cur["low"]
         signal_time = cur.get("timestamp", "")
 
         rsi = _rsi(candles, RSI_PERIOD)
         vol_z = _volume_zscore(candles, VOLUME_LOOKBACK)
 
-        # ── Single boolean entry masks ──
-        near_low = close <= range_low * (1 + ENTRY_THRESHOLD)
-        near_high = close >= range_high * (1 - ENTRY_THRESHOLD)
+        # ── Single boolean entry masks (intrabar: any touch during 15m bar satisfies level) ──
+        low_threshold = range_low * (1 + ENTRY_THRESHOLD)
+        high_threshold = range_high * (1 - ENTRY_THRESHOLD)
+        near_low = low <= low_threshold  # bar touched or went below level at some point
+        near_high = high >= high_threshold  # bar touched or went above level at some point
         rsi_oversold = rsi is not None and rsi < RSI_LONG
         rsi_overbought = rsi is not None and rsi > RSI_SHORT
         vol_quiet = vol_z is not None and vol_z <= 0
@@ -137,8 +141,8 @@ class RangeStrategy:
         vol_z_str = f"{vol_z:.2f}" if vol_z is not None else "N/A"
 
         entry_conds = [
-            {"label": "Near range low (LONG)", "required": f"close ≤ {range_low * (1 + ENTRY_THRESHOLD):.2f}", "actual": f"{close:.2f}", "met": near_low},
-            {"label": "Near range high (SHORT)", "required": f"close ≥ {range_high * (1 - ENTRY_THRESHOLD):.2f}", "actual": f"{close:.2f}", "met": near_high},
+            {"label": "Touch range low (LONG)", "required": f"low ≤ {low_threshold:.2f}", "actual": f"{low:.2f}", "met": near_low},
+            {"label": "Touch range high (SHORT)", "required": f"high ≥ {high_threshold:.2f}", "actual": f"{high:.2f}", "met": near_high},
             {"label": "RSI oversold (LONG)", "required": f"< {RSI_LONG}", "actual": rsi_str, "met": rsi_oversold},
             {"label": "RSI overbought (SHORT)", "required": f"> {RSI_SHORT}", "actual": rsi_str, "met": rsi_overbought},
             {"label": "Volume Z ≤ 0 (quiet)", "required": "≤ 0", "actual": vol_z_str, "met": vol_quiet},
@@ -151,7 +155,7 @@ class RangeStrategy:
                 range_high, range_low, range_mid, rsi, vol_z, close,
                 [
                     f"Range [{range_low:.2f} – {range_high:.2f}]",
-                    f"Range bounce LONG: close {close:.2f} near low, RSI {rsi_str}, vol_z {vol_z_str}",
+                    f"Range bounce LONG: low {low:.2f} touched ≤ {low_threshold:.2f}, RSI {rsi_str}, vol_z {vol_z_str}",
                 ],
                 entry_conditions=entry_conds,
             )
@@ -171,8 +175,9 @@ class RangeStrategy:
                 range_high, range_low, range_mid, rsi, vol_z, close,
                 [
                     f"Range [{range_low:.2f} – {range_high:.2f}]",
-                    f"Range bounce SHORT: close {close:.2f} near high, RSI {rsi_str}, vol_z {vol_z_str}",
+                    f"Range bounce SHORT: high {high:.2f} touched ≥ {high_threshold:.2f}, RSI {rsi_str}, vol_z {vol_z_str}",
                 ],
+                entry_conditions=entry_conds,
             )
             return Signal(
                 symbol=self._symbol,
@@ -186,7 +191,7 @@ class RangeStrategy:
         # ── No entry — explain why ──
         reasoning: list[str] = [f"Range [{range_low:.2f} – {range_high:.2f}]"]
         if not near_low and not near_high:
-            reasoning.append(f"Close {close:.2f} not near range bounds")
+            reasoning.append(f"Bar did not touch low ≤ {low_threshold:.2f} or high ≥ {high_threshold:.2f} (low={low:.2f}, high={high:.2f})")
         elif near_low and not rsi_oversold:
             reasoning.append(f"Near low but RSI {rsi_str} >= {RSI_LONG}")
         elif near_high and not rsi_overbought:

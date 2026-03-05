@@ -25,6 +25,7 @@ interface RegimeClassifier {
   hh_ratio?: number | null
   ll_ratio?: number | null
   score?: number | null
+  trend_direction?: 'up' | 'down' | 'neutral'
 }
 
 interface EntryCondition {
@@ -137,11 +138,16 @@ export function InsightTab() {
 
       {/* ── Header ───────────────────────────── */}
       <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-6 shadow-[var(--shadow)] ring-1 ring-white/5 backdrop-blur-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-muted)]">Market Insight</h3>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-muted)]">Market Insight</h3>
           <div className="flex items-center gap-3">
             <span className={`rounded-lg px-3 py-1 text-xs font-bold uppercase tracking-wider ring-1 ${regimeClass}`}>
               {regime}
+              {isTrending && rc?.trend_direction && rc.trend_direction !== 'neutral' && (
+                <span className="ml-1.5 font-normal normal-case">
+                  {rc.trend_direction === 'up' ? '↑ Up' : '↓ Down'}
+                </span>
+              )}
             </span>
             {data?.regime_score != null && (
               <span className="rounded-md bg-[var(--bg-elevated)] px-2 py-1 text-[11px] font-medium text-[var(--text-muted)] ring-1 ring-[var(--border)]">
