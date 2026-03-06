@@ -55,6 +55,7 @@ interface InsightData {
   bb_width_z?: number | null
   engine_reasoning: string[]
   entry_conditions?: EntryCondition[]
+  skip_reason?: string | null
   trend_reference?: TrendRef
   range_reference?: RangeRef
   regime_classifier?: RegimeClassifier
@@ -265,6 +266,16 @@ export function InsightTab() {
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {/* ── Skip Reason ──────────────────── */}
+      {data?.skip_reason && (
+        <div className="flex items-center gap-2.5 rounded-2xl border border-amber-500/25 bg-amber-500/5 px-5 py-3.5 shadow-[var(--shadow)] ring-1 ring-amber-500/10 backdrop-blur-sm">
+          <span className="text-amber-400">⏸</span>
+          <span className="text-sm font-medium text-amber-300/90">
+            Signal skipped: <span className="font-normal text-amber-200/70">{data.skip_reason}</span>
+          </span>
         </div>
       )}
 

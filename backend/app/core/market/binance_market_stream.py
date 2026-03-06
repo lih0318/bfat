@@ -116,6 +116,7 @@ class BinanceMarketStream:
                                 except Exception:
                                     equity = 0.0
                                 if equity <= 0:
+                                    self._engine._last_skip_reason = "equity_zero_or_unavailable"
                                     try:
                                         self._engine.evaluate_for_insight(candles_list)
                                     except Exception:
@@ -124,10 +125,14 @@ class BinanceMarketStream:
                                 try:
                                     self._engine.on_candle_close(candles_list, equity)
                                 except (CancelFailureError, NewStopPlacementError):
-                                    continue
+                                    pass
                                 except RuntimeError:
                                     self._running = False
                                     raise
+                                try:
+                                    self._engine.evaluate_for_insight(candles_list)
+                                except Exception:
+                                    pass
                         except json.JSONDecodeError:
                             continue
                         except websockets.ConnectionClosed:

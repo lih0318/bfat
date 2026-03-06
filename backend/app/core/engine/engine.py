@@ -163,6 +163,7 @@ class BFATEngine:
         self._current_stop_order_id: str | None = None
         self._current_take_profit: float | None = None
         self._last_signal_candle_ts: str = ""
+        self._last_skip_reason: str | None = None
 
     def _check_state_consistency(self) -> None:
         """Raise if engine state is inconsistent."""
@@ -185,11 +186,14 @@ class BFATEngine:
 
     def on_candle_close(self, candles: list[dict], equity: float) -> None:
         """Handle candle close: evaluate strategy engine, place orders, or trail stop."""
+        self._last_skip_reason = None
         self._check_state_consistency()
         self._kill_switch.update_equity(equity)
         if self._kill_switch.is_triggered():
+            self._last_skip_reason = "kill_switch_triggered"
             return
         if self._state_machine.state == PositionState.ENTERING:
+            self._last_skip_reason = "state_entering"
             return
 
         # ── Strategy engine evaluation (regime + active strategy) ──
@@ -208,14 +212,18 @@ class BFATEngine:
                         event="regime_switch_close_failed",
                         message=f"Regime switch close failed: {e}. Will retry next candle.",
                     )
-            return  # no entry on same candle as regime switch
+            self._last_skip_reason = "regime_switch_close"
+            return
 
         # ── FLAT → entry if Signal ──
         if self._state_machine.state == PositionState.FLAT:
             if not isinstance(result, Signal):
+                se_reason = getattr(self._strategy_engine, "_last_skip_reason", None)
+                self._last_skip_reason = se_reason or "no_signal"
                 return
             signal = result
             if signal.signal_candle_ts == self._last_signal_candle_ts:
+                self._last_skip_reason = "duplicate_signal_candle"
                 return
             atr_val = _atr(candles, ATR_PERIOD)
             entry_price_est = candles[-1]["close"]
@@ -224,6 +232,7 @@ class BFATEngine:
                 stop_price_est = signal.stop_price
             else:
                 if atr_val <= 0:
+                    self._last_skip_reason = "atr_invalid"
                     return
                 stop_price_est = (
                     entry_price_est - INITIAL_STOP_ATR * atr_val
@@ -235,6 +244,7 @@ class BFATEngine:
             )
             position_size *= signal.position_scale
             if position_size <= 0:
+                self._last_skip_reason = "position_size_zero"
                 return
             try:
                 self._state_machine.on_signal(signal)

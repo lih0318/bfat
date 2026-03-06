@@ -616,4 +616,8 @@ class EngineService:
             result["range_reference"] = details["range_reference"]
         if "entry_conditions" in details:
             result["entry_conditions"] = details["entry_conditions"]
+        skip_reason = details.get("skip_reason")
+        if skip_reason is None and self._engine is not None:
+            skip_reason = getattr(self._engine, "_last_skip_reason", None)
+        result["skip_reason"] = skip_reason
         return result

@@ -66,6 +66,7 @@ class StrategyEngine:
         self._regime_switch_cooldown: int = 0
         self._last_score: int = 0
         self._last_position_scale: float = 1.0
+        self._last_skip_reason: Optional[str] = None
 
     # ── Public API ─────────────────────────────────────────────────
 
@@ -81,6 +82,7 @@ class StrategyEngine:
             CloseSignal  – close existing position (regime switch, losing)
             None         – no action (cooldown, no signal, winning hold)
         """
+        self._last_skip_reason = None
         regime = self.regime_classifier.evaluate(candles)
         rc_details = self.regime_classifier.get_last_details()
         score = rc_details.get("score", 0)
@@ -102,10 +104,12 @@ class StrategyEngine:
                 if unrealized < 0:
                     return CloseSignal(reason="Regime Switch - Losing Position")
                 self._regime_switch_cooldown = _COOLDOWN_BARS
+                self._last_skip_reason = "regime_switch_winning_hold"
                 return None
 
             if not self._check_strong_momentum(candles):
                 self._regime_switch_cooldown = _COOLDOWN_BARS
+                self._last_skip_reason = "regime_switch_weak_momentum"
                 return None
         else:
             self._active_regime = regime
@@ -113,10 +117,14 @@ class StrategyEngine:
         # ── 2. Cooldown gate ──────────────────────────────────────
         if self._regime_switch_cooldown > 0:
             self._regime_switch_cooldown -= 1
+            self._last_skip_reason = f"cooldown ({self._regime_switch_cooldown + 1} bars remaining)"
             return None
 
         # ── 3. Active strategy evaluation ─────────────────────────
         signal = self._evaluate_active_strategy(candles)
+
+        if signal is None:
+            self._last_skip_reason = "no_signal_from_strategy"
 
         # ── 4. Apply position scale ───────────────────────────────
         if signal is not None:
@@ -158,6 +166,7 @@ class StrategyEngine:
         details["regime_score"] = self._last_score
         details["position_scale"] = self._last_position_scale
         details["cooldown_remaining"] = self._regime_switch_cooldown
+        details["skip_reason"] = self._last_skip_reason
         details["regime_classifier"] = self.regime_classifier.get_last_details()
 
         bd = self.breakout_strategy.get_last_evaluation_details()
