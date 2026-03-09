@@ -79,6 +79,17 @@ class EngineService:
         self._equity_ts: float = 0.0
         self._live_pos_cache: dict[str, Any] | None = None
         self._live_pos_ts: float = 0.0
+        rest_base = (
+            BINANCE_REST_TESTNET
+            if self._settings.binance_testnet
+            else BINANCE_REST_MAINNET
+        )
+        self._readonly_execution = BinanceExecutionClient(
+            api_key=self._settings.binance_api_key,
+            api_secret=self._settings.binance_api_secret,
+            base_url=rest_base,
+            testnet=self._settings.binance_testnet,
+        )
 
     def _build_engine(self) -> BFATEngine:
         """Construct engine with all dependencies."""
@@ -132,7 +143,10 @@ class EngineService:
     _LIVE_POS_TTL = 30.0  # seconds — rate-limit Binance position queries
 
     def _fetch_binance_position(self) -> dict[str, Any] | None:
-        """Query Binance for a live position. Cached for _LIVE_POS_TTL seconds."""
+        """Query Binance for a live position. Cached for _LIVE_POS_TTL seconds.
+
+        Also queries Open Orders for STOP_MARKET to populate stop_price.
+        """
         now = time.monotonic()
         if now - self._live_pos_ts < self._LIVE_POS_TTL:
             return self._live_pos_cache
@@ -141,15 +155,16 @@ class EngineService:
         try:
             acct = self._binance_account.account()
             result = None
+            symbol = self._settings.bfat_symbol
             for p in acct.get("positions", []):
-                if p.get("symbol") == self._settings.bfat_symbol:
+                if p.get("symbol") == symbol:
                     amt = float(p.get("positionAmt", 0))
                     if amt == 0:
                         break
                     entry_price = float(p.get("entryPrice", 0))
                     unrealized = float(p.get("unrealizedProfit", 0))
                     result = {
-                        "symbol": self._settings.bfat_symbol,
+                        "symbol": symbol,
                         "side": "long" if amt > 0 else "short",
                         "size": abs(amt),
                         "entry_price": entry_price,
@@ -162,6 +177,22 @@ class EngineService:
                         "source": "binance",
                     }
                     break
+            if result is not None:
+                exec_client = (
+                    self._engine._execution if self._engine else self._readonly_execution
+                )
+                try:
+                    open_orders = exec_client.get_open_orders(symbol)
+                    for order in open_orders:
+                        if order.get("type") in ("STOP_MARKET", "STOP") and order.get("status") == "NEW":
+                            sp = float(order.get("stopPrice", 0))
+                            if sp > 0:
+                                result["stop_price"] = sp
+                                result["initial_stop_price"] = sp
+                                result["stop_phase"] = "active"
+                            break
+                except Exception as e:
+                    logger.debug("Open orders fetch for SL failed: %s", e)
             self._live_pos_cache = result
             self._live_pos_ts = now
             return result
@@ -174,11 +205,12 @@ class EngineService:
         equity = self._equity_provider()
         if self._engine is None:
             live_pos = self._fetch_binance_position()
+            live_stop = live_pos.get("stop_price", 0) if live_pos else 0
             return {
                 "engine_state": "stopped",
                 "position": live_pos,
                 "last_signal": None,
-                "current_stop_price": None,
+                "current_stop_price": live_stop if live_stop > 0 else None,
                 "r_multiple": None,
                 "r_validation_status": None,
                 "system_health": "HEALTHY",
@@ -230,7 +262,11 @@ class EngineService:
             "engine_state": sm.state.value,
             "position": pos_dict,
             "last_signal": last_signal,
-            "current_stop_price": pos.stop_price if pos else None,
+            "current_stop_price": (
+                pos.stop_price if pos
+                else (pos_dict.get("stop_price", 0) or None) if pos_dict and pos_dict.get("stop_price", 0) > 0
+                else None
+            ),
             "take_profit": take_profit,
             "r_multiple": r_multiple,
             "r_validation_status": r_validation_status,

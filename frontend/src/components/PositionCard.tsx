@@ -104,7 +104,9 @@ export function PositionCard({ position, currentStopPrice, takeProfit, rMultiple
             )}
           </div>
           <p className="mt-1.5 text-lg font-bold tabular-nums text-rose-400">
-            {sl > 0 ? fmt(sl) : '–'}
+            {sl > 0 ? fmt(sl) : isBinanceLive ? (
+              <span className="text-sm font-medium text-rose-300/60">SL 정보 없음</span>
+            ) : '–'}
           </p>
         </div>
 
