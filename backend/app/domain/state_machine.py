@@ -15,8 +15,8 @@ def _stop_phase_index(phase: StopPhase) -> int:
 
 
 def _is_forward_only(current: StopPhase, new_phase: StopPhase) -> bool:
-    """True if new_phase is strictly after current in the forward direction."""
-    return _stop_phase_index(new_phase) > _stop_phase_index(current)
+    """True if new_phase is at least current (same phase OK, e.g. TRAILING→TRAILING for price updates)."""
+    return _stop_phase_index(new_phase) >= _stop_phase_index(current)
 
 
 def _is_stop_price_favorable(side: Side, current_stop: float, new_stop: float) -> bool:
