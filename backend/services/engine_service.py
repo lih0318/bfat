@@ -145,7 +145,8 @@ class EngineService:
     def _fetch_binance_position(self) -> dict[str, Any] | None:
         """Query Binance for a live position. Cached for _LIVE_POS_TTL seconds.
 
-        Also queries Open Orders for STOP_MARKET to populate stop_price.
+        Uses positionRisk (get_position) for accurate entry_price; also queries
+        Open Orders for STOP_MARKET to populate stop_price.
         """
         now = time.monotonic()
         if now - self._live_pos_ts < self._LIVE_POS_TTL:
@@ -153,16 +154,28 @@ class EngineService:
         if not self._binance_account.is_configured():
             return None
         try:
-            acct = self._binance_account.account()
-            result = None
             symbol = self._settings.bfat_symbol
-            for p in acct.get("positions", []):
-                if p.get("symbol") == symbol:
-                    amt = float(p.get("positionAmt", 0))
-                    if amt == 0:
-                        break
-                    entry_price = float(p.get("entryPrice", 0))
-                    unrealized = float(p.get("unrealizedProfit", 0))
+            exec_client = (
+                self._engine._execution if self._engine else self._readonly_execution
+            )
+            pos_data = exec_client.get_position(symbol)
+            result = None
+            if pos_data and isinstance(pos_data, dict):
+                amt = float(pos_data.get("positionAmt") or pos_data.get("position_amt") or 0)
+                if amt != 0:
+                    ep = pos_data.get("entryPrice") or pos_data.get("entry_price") or 0
+                    entry_price = float(ep) if ep else 0.0
+                    up = pos_data.get("unRealizedProfit") or pos_data.get("unrealizedProfit") or 0
+                    unrealized = float(up) if up else 0.0
+                    update_ts = pos_data.get("updateTime") or pos_data.get("update_time")
+                    entry_time = ""
+                    if update_ts:
+                        try:
+                            entry_time = datetime.fromtimestamp(
+                                int(update_ts) / 1000, tz=timezone.utc
+                            ).isoformat(timespec="seconds") + "Z"
+                        except (ValueError, TypeError, OSError):
+                            pass
                     result = {
                         "symbol": symbol,
                         "side": "long" if amt > 0 else "short",
@@ -171,12 +184,11 @@ class EngineService:
                         "stop_price": 0,
                         "initial_stop_price": 0,
                         "stop_phase": "unknown",
-                        "entry_time": "",
+                        "entry_time": entry_time,
                         "correlation_id": "binance_live",
                         "unrealized_pnl": unrealized,
                         "source": "binance",
                     }
-                    break
             if result is not None:
                 exec_client = (
                     self._engine._execution if self._engine else self._readonly_execution
@@ -287,10 +299,11 @@ class EngineService:
             pos_data = exec_client.get_position(symbol)
             if not pos_data:
                 return
-            pos_amt = float(pos_data.get("positionAmt", 0))
+            pos_amt = float(pos_data.get("positionAmt") or pos_data.get("position_amt") or 0)
             if pos_amt == 0:
                 return
-            entry_price = float(pos_data.get("entryPrice", 0))
+            ep = pos_data.get("entryPrice") or pos_data.get("entry_price") or 0
+            entry_price = float(ep) if ep else 0.0
             if entry_price <= 0:
                 return
             side = Side.LONG if pos_amt > 0 else Side.SHORT
@@ -331,7 +344,7 @@ class EngineService:
                     )
                     return
 
-            update_ts = pos_data.get("updateTime")
+            update_ts = pos_data.get("updateTime") or pos_data.get("update_time")
             if update_ts:
                 try:
                     entry_time = datetime.fromtimestamp(int(update_ts) / 1000, tz=timezone.utc).isoformat(timespec="seconds") + "Z"
