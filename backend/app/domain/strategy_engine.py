@@ -7,7 +7,7 @@ Features:
   * Regime-switch PnL gate: losing → close, winning → hold + cooldown
   * Strong-momentum conditional immediate entry after regime switch
   * Score-based position sizing (0.7x / 1.0x / 1.2x)
-  * Cooldown after soft regime transitions (2 candles)
+  * Cooldown after soft regime transitions (2 bars for TRENDING, 1 bar for RANGING)
 """
 
 from typing import Any, Optional, Union
@@ -23,7 +23,8 @@ _MOMENTUM_VOL_Z_THRESHOLD = 1.0
 _MOMENTUM_BODY_RATIO_THRESHOLD = 0.6
 _MOMENTUM_MIN_CONDITIONS = 2
 
-_COOLDOWN_BARS = 2
+_COOLDOWN_BARS = 2  # TRENDING: weak-momentum block, winning-hold after switch to TRENDING
+_COOLDOWN_BARS_RANGING = 1  # winning-hold after switch to RANGING (lighter pause)
 
 
 def _volume_zscore(candles: list[dict], period: int = 20) -> Optional[float]:
@@ -52,8 +53,8 @@ class StrategyEngine:
 
     * Only ONE strategy is active at a time.
     * Regime change with losing position → CloseSignal.
-    * Regime change with winning position → hold + cooldown (no strategy eval).
-    * Strong-momentum bypass for immediate entry after regime switch.
+    * Regime change with winning position → hold + cooldown (1 bar if new regime RANGING, else 2).
+    * Strong-momentum required only when switching TO TRENDING; RANGING allows immediate eval.
     * Score-based position sizing applied to every signal.
     """
 
@@ -103,11 +104,15 @@ class StrategyEngine:
                 unrealized = self._unrealized_pnl(current_position, candles)
                 if unrealized < 0:
                     return CloseSignal(reason="Regime Switch - Losing Position")
-                self._regime_switch_cooldown = _COOLDOWN_BARS
+                self._regime_switch_cooldown = (
+                    _COOLDOWN_BARS_RANGING if regime == "RANGING" else _COOLDOWN_BARS
+                )
                 self._last_skip_reason = "regime_switch_winning_hold"
                 return None
 
-            if not self._check_strong_momentum(candles):
+            # Strong momentum required only when switching TO TRENDING (breakout confirmation).
+            # When switching TO RANGING, allow immediate Range evaluation (no cooldown here).
+            if regime == "TRENDING" and not self._check_strong_momentum(candles):
                 self._regime_switch_cooldown = _COOLDOWN_BARS
                 self._last_skip_reason = "regime_switch_weak_momentum"
                 return None
