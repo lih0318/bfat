@@ -110,11 +110,16 @@ class StrategyEngine:
                 self._last_skip_reason = "regime_switch_winning_hold"
                 return None
 
-            # Strong momentum required only when switching TO TRENDING (breakout confirmation).
-            # When switching TO RANGING, allow immediate Range evaluation (no cooldown here).
-            if regime == "TRENDING" and not self._check_strong_momentum(candles):
-                self._regime_switch_cooldown = _COOLDOWN_BARS
-                self._last_skip_reason = "regime_switch_weak_momentum"
+            # ── No position ──
+            if regime == "TRENDING":
+                if not self._check_strong_momentum(candles):
+                    self._regime_switch_cooldown = _COOLDOWN_BARS
+                    self._last_skip_reason = "regime_switch_weak_momentum"
+                    return None
+            elif regime == "RANGING":
+                # No strong momentum requirement; reduced cooldown (1 bar) only
+                self._regime_switch_cooldown = _COOLDOWN_BARS_RANGING
+                self._last_skip_reason = "regime_switch_ranging_cooldown"
                 return None
         else:
             self._active_regime = regime
