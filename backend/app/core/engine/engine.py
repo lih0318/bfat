@@ -1,11 +1,14 @@
 """BFAT orchestrator. No business logic. Coordinates modules only."""
 
 import hashlib
+import logging
 from datetime import datetime
 from decimal import Decimal, getcontext
 from typing import Any
 
 from app.core.execution import BinanceExecutionClient, _generate_client_order_id
+
+logger = logging.getLogger(__name__)
 from app.domain.enums import PositionState, Side, StopPhase
 from app.domain.position import Position
 from app.domain.signal import CloseSignal, Signal
@@ -164,6 +167,7 @@ class BFATEngine:
         self._current_take_profit: float | None = None
         self._last_signal_candle_ts: str = ""
         self._last_skip_reason: str | None = None
+        self._pending_fallback_close: bool = False
 
     def _check_state_consistency(self) -> None:
         """Raise if engine state is inconsistent."""
@@ -195,6 +199,63 @@ class BFATEngine:
         if self._state_machine.state == PositionState.ENTERING:
             self._last_skip_reason = "state_entering"
             return
+
+        # ── Fallback: detect position closed on exchange but not via User Stream ──
+        if self._state_machine.state == PositionState.OPEN:
+            pos = self._state_machine.position
+            if pos is not None:
+                try:
+                    live = self._execution.get_position(self._symbol)
+                    amt_raw = live.get("positionAmt") or live.get("position_amt") or 0
+                    amt = float(amt_raw)
+                    if abs(amt) < 1e-8:
+                        if not self._pending_fallback_close:
+                            self._pending_fallback_close = True
+                            return
+                        trades = self._execution.get_user_trades(self._symbol, limit=10)
+                        if len(trades) == 0:
+                            return
+                        try:
+                            entry_ts = int(
+                                datetime.fromisoformat(pos.entry_time.replace("Z", "")).timestamp() * 1000
+                            )
+                        except (ValueError, TypeError, AttributeError):
+                            return
+                        total_qty = 0.0
+                        total_value = 0.0
+                        for t in trades:
+                            trade_time = int(t.get("time", 0))
+                            if trade_time < entry_ts:
+                                continue
+                            qty = float(t.get("qty", 0))
+                            price = float(t.get("price", 0))
+                            is_buyer = t.get("buyer")
+                            if pos.side == Side.LONG:
+                                is_exit = not is_buyer
+                            else:
+                                is_exit = bool(is_buyer)
+                            if qty > 0 and is_exit:
+                                total_qty += qty
+                                total_value += qty * price
+                        exit_price = total_value / total_qty if total_qty > 0 else None
+                        if exit_price is None:
+                            return
+                        self._system_log.insert(
+                            level="WARNING",
+                            event="position_closed_fallback",
+                            message=f"Fallback close detected. Exit: {exit_price}",
+                        )
+                        self._pending_fallback_close = False
+                        self.on_position_closed(exit_price, equity)
+                        return
+                    else:
+                        self._pending_fallback_close = False
+                except Exception as e:
+                    self._system_log.insert(
+                        level="WARNING",
+                        event="position_sync_check_failed",
+                        message=str(e),
+                    )
 
         # ── Strategy engine evaluation (regime + active strategy) ──
         result = self._strategy_engine.evaluate(
@@ -293,6 +354,12 @@ class BFATEngine:
                         actual_size,
                         stop_price,
                         stop_id,
+                    )
+                    if not stop_resp or "orderId" not in stop_resp:
+                        raise RuntimeError("STOP order placement failed")
+                    logger.info(
+                        "[STOP_ORDER_PLACED]",
+                        extra={"orderId": stop_resp.get("orderId"), "stopPrice": stop_price},
                     )
                     self._current_stop_order_id = _validate_stop_response(stop_resp)
                 except Exception as e:
@@ -415,6 +482,12 @@ class BFATEngine:
                 pos.size,
                 new_stop,
                 stop_id,
+            )
+            if not stop_resp or "orderId" not in stop_resp:
+                raise RuntimeError("STOP order placement failed")
+            logger.info(
+                "[STOP_ORDER_PLACED]",
+                extra={"orderId": stop_resp.get("orderId"), "stopPrice": new_stop},
             )
             new_stop_order_id = _validate_stop_response(stop_resp)
         except Exception as e:

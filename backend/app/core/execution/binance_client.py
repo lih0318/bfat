@@ -243,3 +243,8 @@ class BinanceExecutionClient:
         if not isinstance(data, list):
             return []
         return data
+
+    def get_user_trades(self, symbol: str, limit: int = 20) -> list[dict]:
+        """GET /fapi/v1/userTrades. Returns list of trade dicts (most recent first)."""
+        data = self._request("GET", "/fapi/v1/userTrades", {"symbol": symbol, "limit": limit})
+        return data if isinstance(data, list) else []

@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 from typing import Any, Callable
 
 import websockets
@@ -9,6 +10,7 @@ import websockets
 from app.core.engine.engine import CancelFailureError, NewStopPlacementError
 from app.core.ws._binance_rest import create_listen_key, keepalive_listen_key
 
+logger = logging.getLogger(__name__)
 
 BINANCE_WS_MAINNET = "wss://fstream.binance.com/ws"
 BINANCE_WS_TESTNET = "wss://stream.binancefuture.com/ws"
@@ -17,8 +19,8 @@ BINANCE_REST_TESTNET = "https://testnet.binancefuture.com"
 KEEPALIVE_INTERVAL_SEC = 30 * 60
 
 
-def _parse_order_trade_update(msg: dict) -> tuple[float, bool] | None:
-    """If reduceOnly FILLED order, return (exit_price, True). Else None."""
+def _parse_order_trade_update(msg: dict, expected_symbol: str | None = None) -> tuple[float, str] | None:
+    """If reduceOnly FILLED order, return (exit_price, symbol). Else None."""
     if msg.get("e") != "ORDER_TRADE_UPDATE":
         return None
     o = msg.get("o")
@@ -26,18 +28,22 @@ def _parse_order_trade_update(msg: dict) -> tuple[float, bool] | None:
         return None
     if o.get("X") != "FILLED":
         return None
-    if not o.get("R"):
+    reduce_only = o.get("R") or o.get("r")
+    if not reduce_only:
         return None
     cid = str(o.get("c", ""))
-    if not cid.startswith("bfat_"):
-        return None
+    symbol_in_msg = str(o.get("s", ""))
+    is_engine_order = cid.startswith("bfat_")
+    if not is_engine_order:
+        if expected_symbol is None or symbol_in_msg != expected_symbol:
+            return None
     try:
         ap = o.get("ap")
         if ap is not None and str(ap) != "":
-            return float(ap), True
+            return float(ap), symbol_in_msg
         L = o.get("L")
         if L is not None and str(L) != "":
-            return float(L), True
+            return float(L), symbol_in_msg
         return None
     except (TypeError, ValueError):
         return None
@@ -116,9 +122,14 @@ class BinanceUserStream:
                             break
                         try:
                             msg = json.loads(raw)
-                            result = _parse_order_trade_update(msg)
+                            expected_symbol = getattr(self._engine, "_symbol", None)
+                            result = _parse_order_trade_update(msg, expected_symbol=expected_symbol)
                             if result:
-                                exit_price, _ = result
+                                exit_price, symbol_in_msg = result
+                                logger.info(
+                                    "[STOP_FILLED_DETECTED]",
+                                    extra={"symbol": symbol_in_msg, "price": exit_price},
+                                )
                                 try:
                                     equity = self._equity_provider()
                                 except Exception:
