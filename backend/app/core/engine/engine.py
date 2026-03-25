@@ -114,7 +114,6 @@ def _close_position_flatten(
 
 ATR_PERIOD = 14
 INITIAL_STOP_ATR = 1.2
-TRAILING_STOP_ATR = 1.5
 
 
 def _atr(candles: list[dict], period: int = 14) -> float:
@@ -189,7 +188,7 @@ class BFATEngine:
         self._strategy_engine.evaluate_for_insight(candles)
 
     def on_candle_close(self, candles: list[dict], equity: float) -> None:
-        """Handle candle close: evaluate strategy engine, place orders, or trail stop."""
+        """Handle candle close: evaluate strategy, entries, CloseSignal exits, logical TP."""
         self._last_skip_reason = None
         self._check_state_consistency()
         self._kill_switch.update_equity(equity)
@@ -262,18 +261,22 @@ class BFATEngine:
             candles, self._state_machine.position
         )
 
-        # ── Regime switch → close existing position ──
+        # ── CloseSignal → market close (regime switch, strategy exit, etc.) ──
         if isinstance(result, CloseSignal):
             if self._state_machine.state == PositionState.OPEN:
                 try:
-                    self._regime_switch_close(equity)
+                    self._market_close_open_position(
+                        equity,
+                        event="close_signal",
+                        message=result.reason,
+                    )
                 except Exception as e:
                     self._system_log.insert(
                         level="ERROR",
-                        event="regime_switch_close_failed",
-                        message=f"Regime switch close failed: {e}. Will retry next candle.",
+                        event="market_close_failed",
+                        message=f"Close signal failed: {e}. Will retry next candle.",
                     )
-            self._last_skip_reason = "regime_switch_close"
+            self._last_skip_reason = "close_signal"
             return
 
         # ── FLAT → entry if Signal ──
@@ -383,6 +386,7 @@ class BFATEngine:
                     stop_phase=StopPhase.INITIAL,
                     entry_time=_ts(),
                     correlation_id=entry_id,
+                    take_profit=signal.take_profit,
                 )
                 try:
                     self._state_machine.on_entry_filled(position)
@@ -411,7 +415,7 @@ class BFATEngine:
                 raise RuntimeError("Entry failure") from e
             return
 
-        # ── OPEN → trailing stop ──
+        # ── OPEN → fixed SL on exchange; optional logical take-profit at candle close ──
         if self._state_machine.state == PositionState.OPEN:
             pos = self._state_machine.position
             if pos is None:
@@ -424,22 +428,37 @@ class BFATEngine:
                     pos.size,
                 )
                 raise RuntimeError("CRITICAL: stop order missing while OPEN")
-            try:
-                self._trailing_logic(candles, pos)
-            except (CancelFailureError, NewStopPlacementError):
-                raise
-            except Exception as e:
-                _close_position_flatten(
-                    self._execution,
-                    self._symbol,
-                    pos.side,
-                    pos.size,
+            close_px = candles[-1]["close"]
+            tp = pos.take_profit
+            if tp is not None:
+                hit = (
+                    pos.side == Side.LONG and close_px >= tp
+                ) or (
+                    pos.side == Side.SHORT and close_px <= tp
                 )
-                raise RuntimeError("CRITICAL ENGINE FAILURE") from e
+                if hit:
+                    try:
+                        self._market_close_open_position(
+                            equity,
+                            event="take_profit_hit",
+                            message=f"Take profit at close {close_px:.4f} (target {tp:.4f})",
+                        )
+                    except Exception as e:
+                        self._system_log.insert(
+                            level="ERROR",
+                            event="take_profit_close_failed",
+                            message=str(e),
+                        )
+                    return
             self._check_state_consistency()
 
-    def _regime_switch_close(self, equity: float) -> None:
-        """Force-close current position due to regime switch. Records trade via on_position_closed."""
+    def _market_close_open_position(
+        self,
+        equity: float,
+        event: str,
+        message: str,
+    ) -> None:
+        """Market-close OPEN position. Records trade via on_position_closed."""
         pos = self._state_machine.position
         if pos is None:
             return
@@ -448,68 +467,17 @@ class BFATEngine:
             self._symbol,
             close_side,
             pos.size,
-            _generate_client_order_id("bfat_regime_close"),
+            _generate_client_order_id("bfat_market_close"),
         )
         resp = _validate_response_dict(resp)
         _validate_market_response(resp)
         exit_price, _ = _parse_fill(resp)
         self._system_log.insert(
             level="INFO",
-            event="regime_switch_close",
-            message=f"Position closed due to regime switch. Exit: {exit_price:.4f}",
+            event=event,
+            message=f"{message} Exit: {exit_price:.4f}",
         )
         self.on_position_closed(exit_price, equity)
-
-    def _trailing_logic(self, candles: list[dict], pos: Position) -> None:
-        """Trailing stop logic. Assumes OPEN state and valid _current_stop_order_id."""
-        atr_val = _atr(candles, ATR_PERIOD)
-        if atr_val <= 0:
-            return
-        current_price = candles[-1]["close"]
-        if pos.side == Side.LONG:
-            new_stop = current_price - TRAILING_STOP_ATR * atr_val
-        else:
-            new_stop = current_price + TRAILING_STOP_ATR * atr_val
-        if pos.side == Side.LONG and new_stop <= pos.stop_price:
-            return
-        if pos.side == Side.SHORT and new_stop >= pos.stop_price:
-            return
-        stop_id = _generate_client_order_id("bfat_stop")
-        try:
-            stop_resp = self._execution.place_stop_market_order(
-                self._symbol,
-                pos.side,
-                pos.size,
-                new_stop,
-                stop_id,
-            )
-            if not stop_resp or "orderId" not in stop_resp:
-                raise RuntimeError("STOP order placement failed")
-            logger.info(
-                "[STOP_ORDER_PLACED]",
-                extra={"orderId": stop_resp.get("orderId"), "stopPrice": new_stop},
-            )
-            new_stop_order_id = _validate_stop_response(stop_resp)
-        except Exception as e:
-            raise NewStopPlacementError(
-                "New stop placement failed; old stop remains active"
-            ) from e
-        if self._current_stop_order_id:
-            try:
-                cancel_resp = self._execution.cancel_order(
-                    self._symbol, self._current_stop_order_id
-                )
-                cancel_resp = _validate_response_dict(cancel_resp)
-                _validate_cancel_response(cancel_resp)
-            except Exception as e:
-                raise CancelFailureError("Cancel failure; new stop active") from e
-        self._current_stop_order_id = new_stop_order_id
-        try:
-            self._state_machine.on_stop_update(StopPhase.TRAILING, new_stop)
-        except Exception as e:
-            raise CancelFailureError(
-                "State transition failed after trailing; new stop remains active"
-            ) from e
 
     def on_position_closed(
         self,

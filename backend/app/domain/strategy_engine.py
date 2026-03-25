@@ -26,6 +26,11 @@ _MOMENTUM_MIN_CONDITIONS = 2
 _COOLDOWN_BARS = 2  # TRENDING: weak-momentum block, winning-hold after switch to TRENDING
 _COOLDOWN_BARS_RANGING = 1  # winning-hold after switch to RANGING (lighter pause)
 
+# Strategy-driven exit thresholds (regime_classifier metrics)
+_ADX_WEAK_EXIT = 18.0
+_BB_CONTRACT_EXIT = 40.0
+_STRUCTURE_BREAK_EXIT = 0.35
+
 
 def _volume_zscore(candles: list[dict], period: int = 20) -> Optional[float]:
     """Z-score of current candle volume vs past-only rolling window."""
@@ -54,8 +59,9 @@ class StrategyEngine:
     * Only ONE strategy is active at a time.
     * Regime change with losing position → CloseSignal.
     * Regime change with winning position → hold + cooldown (1 bar if new regime RANGING, else 2).
+    * With an open position: optional CloseSignal from ADX/BB/structure exit rules (no new entries).
     * Strong-momentum required only when switching TO TRENDING; RANGING allows immediate eval.
-    * Score-based position sizing applied to every signal.
+    * Score-based position sizing applied to every entry signal.
     """
 
     def __init__(self, symbol: str = "BTCUSDT") -> None:
@@ -79,9 +85,9 @@ class StrategyEngine:
         """Evaluate candles under the current regime.
 
         Returns:
-            Signal       – new entry (LONG or SHORT, with position_scale)
-            CloseSignal  – close existing position (regime switch, losing)
-            None         – no action (cooldown, no signal, winning hold)
+            Signal       – new entry (LONG or SHORT, with position_scale); only when flat
+            CloseSignal  – close position (regime switch losing, or strategy exit)
+            None         – no action (cooldown, hold open, no entry signal)
         """
         self._last_skip_reason = None
         regime = self.regime_classifier.evaluate(candles)
@@ -128,6 +134,14 @@ class StrategyEngine:
         if self._regime_switch_cooldown > 0:
             self._regime_switch_cooldown -= 1
             self._last_skip_reason = f"cooldown ({self._regime_switch_cooldown + 1} bars remaining)"
+            return None
+
+        # ── 2b. Open position: strategy-driven exit only (no new entries) ──
+        if current_position is not None:
+            exit_sig = self._evaluate_strategy_exit(candles, current_position)
+            if exit_sig is not None:
+                return exit_sig
+            self._last_skip_reason = "hold_open_position"
             return None
 
         # ── 3. Active strategy evaluation ─────────────────────────
@@ -207,6 +221,25 @@ class StrategyEngine:
             return self.breakout_strategy.evaluate(candles)
         if self._active_regime == "RANGING":
             return self.range_strategy.evaluate(candles)
+        return None
+
+    def _evaluate_strategy_exit(
+        self, candles: list[dict], position: Any
+    ) -> Optional[CloseSignal]:
+        """Exit signals from regime classifier context (ADX / BB width / structure)."""
+        _ = candles, position
+        d = self.regime_classifier.get_last_details()
+        adx = d.get("adx")
+        if adx is not None and float(adx) < _ADX_WEAK_EXIT:
+            return CloseSignal(reason="ADX Weakening")
+        bb_pct = d.get("bb_width_percentile")
+        if bb_pct is not None and float(bb_pct) < _BB_CONTRACT_EXIT:
+            return CloseSignal(reason="BB Width Contraction")
+        hh = d.get("hh_ratio")
+        ll = d.get("ll_ratio")
+        if hh is not None and ll is not None:
+            if max(float(hh), float(ll)) < _STRUCTURE_BREAK_EXIT:
+                return CloseSignal(reason="Structure Breakdown")
         return None
 
     @staticmethod

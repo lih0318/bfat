@@ -244,6 +244,7 @@ class EngineService:
                 "stop_phase": pos.stop_phase.value,
                 "entry_time": pos.entry_time,
                 "correlation_id": pos.correlation_id,
+                "take_profit": pos.take_profit,
             }
         if pos_dict is None:
             live_pos = self._fetch_binance_position()
@@ -269,7 +270,11 @@ class EngineService:
         system_health = "HEALTHY"
         if r_validation_status in ("CRITICAL", "CRITICAL_OUTLIER"):
             system_health = "DEGRADED"
-        take_profit = getattr(self._engine, "_current_take_profit", None)
+        take_profit = (
+            pos.take_profit
+            if pos is not None
+            else getattr(self._engine, "_current_take_profit", None)
+        )
         return {
             "engine_state": sm.state.value,
             "position": pos_dict,
@@ -363,6 +368,7 @@ class EngineService:
                 stop_phase=StopPhase.INITIAL,
                 entry_time=entry_time,
                 correlation_id="restored_from_binance",
+                take_profit=None,
             )
             sm.restore_position(position)
             self._engine._current_stop_order_id = stop_order_id

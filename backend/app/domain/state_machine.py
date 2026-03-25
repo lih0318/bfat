@@ -98,6 +98,7 @@ class StateMachine:
             stop_phase=new_stop_phase,
             entry_time=self._position.entry_time,
             correlation_id=self._position.correlation_id,
+            take_profit=self._position.take_profit,
         )
 
     def on_exit_requested(self) -> None:
