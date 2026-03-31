@@ -188,17 +188,31 @@ class EngineService:
                         "correlation_id": "binance_live",
                         "unrealized_pnl": unrealized,
                         "source": "binance",
+                        "take_profit": None,
                     }
             if result is not None:
                 exec_client = (
                     self._engine._execution if self._engine else self._readonly_execution
                 )
                 try:
+                    for ao in exec_client.get_open_algo_orders(symbol):
+                        st = ao.get("algoStatus") or ao.get("status")
+                        if st != "NEW":
+                            continue
+                        ot = ao.get("orderType") or ao.get("type")
+                        tr = ao.get("triggerPrice")
+                        px = float(tr) if tr not in (None, "") else 0.0
+                        if ot == "STOP_MARKET" and px > 0:
+                            result["stop_price"] = px
+                            result["initial_stop_price"] = px
+                            result["stop_phase"] = "active"
+                        elif ot == "TAKE_PROFIT_MARKET" and px > 0:
+                            result["take_profit"] = px
                     open_orders = exec_client.get_open_orders(symbol)
                     for order in open_orders:
                         if order.get("type") in ("STOP_MARKET", "STOP") and order.get("status") == "NEW":
                             sp = float(order.get("stopPrice", 0))
-                            if sp > 0:
+                            if sp > 0 and (not result.get("stop_price") or result["stop_price"] <= 0):
                                 result["stop_price"] = sp
                                 result["initial_stop_price"] = sp
                                 result["stop_phase"] = "active"
@@ -218,11 +232,14 @@ class EngineService:
         if self._engine is None:
             live_pos = self._fetch_binance_position()
             live_stop = live_pos.get("stop_price", 0) if live_pos else 0
+            live_tp = live_pos.get("take_profit") if live_pos else None
+            live_tp_f = float(live_tp) if live_tp not in (None, "") else None
             return {
                 "engine_state": "stopped",
                 "position": live_pos,
                 "last_signal": None,
                 "current_stop_price": live_stop if live_stop > 0 else None,
+                "take_profit": live_tp_f if live_tp_f and live_tp_f > 0 else None,
                 "r_multiple": None,
                 "r_validation_status": None,
                 "system_health": "HEALTHY",
@@ -317,14 +334,30 @@ class EngineService:
             stop_order_id: str | None = None
             stop_price = entry_price
             try:
-                open_orders = exec_client.get_open_orders(symbol)
-                for order in open_orders:
-                    if order.get("type") in ("STOP_MARKET", "STOP") and order.get("status") == "NEW":
-                        stop_order_id = str(order["orderId"])
-                        sp = float(order.get("stopPrice", 0))
+                for ao in exec_client.get_open_algo_orders(symbol):
+                    st = ao.get("algoStatus") or ao.get("status")
+                    if st != "NEW":
+                        continue
+                    if (ao.get("orderType") or ao.get("type")) != "STOP_MARKET":
+                        continue
+                    aid = ao.get("algoId")
+                    if aid is not None:
+                        stop_order_id = str(aid)
+                    tr = ao.get("triggerPrice")
+                    if tr not in (None, ""):
+                        sp = float(tr)
                         if sp > 0:
                             stop_price = sp
-                        break
+                    break
+                if stop_order_id is None:
+                    open_orders = exec_client.get_open_orders(symbol)
+                    for order in open_orders:
+                        if order.get("type") in ("STOP_MARKET", "STOP") and order.get("status") == "NEW":
+                            stop_order_id = str(order["orderId"])
+                            sp = float(order.get("stopPrice", 0))
+                            if sp > 0:
+                                stop_price = sp
+                            break
             except Exception as e:
                 logger.warning("Failed to fetch open orders during sync: %s", e)
 

@@ -105,6 +105,17 @@ class BinanceExecutionClient:
         """POST /fapi/v1/order."""
         return self._request("POST", "/fapi/v1/order", params)
 
+    def _post_algo_order(self, params: dict[str, Any]) -> dict:
+        """POST /fapi/v1/algoOrder (conditional STOP / TAKE_PROFIT, etc.)."""
+        return self._request("POST", "/fapi/v1/algoOrder", params)
+
+    @staticmethod
+    def _normalize_algo_response(resp: dict) -> dict:
+        """Expose algoId as orderId for callers expecting classic order shape."""
+        if isinstance(resp, dict) and "algoId" in resp and "orderId" not in resp:
+            return {**resp, "orderId": str(resp["algoId"])}
+        return resp
+
     # ── Exchange info & precision ─────────────────────────────────
 
     def _load_exchange_info(self) -> None:
@@ -197,33 +208,81 @@ class BinanceExecutionClient:
         stop_price: float,
         client_order_id: str,
     ) -> dict:
-        """Place STOP_MARKET reduceOnly order. Quantity and price are formatted."""
+        """Place STOP_MARKET via Algo API (closePosition; required on USDT-M futures)."""
         quantity = self.format_quantity(symbol, quantity)
-        stop_price = self.format_price(symbol, stop_price)
+        trigger_px = self.format_price(symbol, stop_price)
         if quantity <= 0:
             raise ValueError(f"quantity after LOT_SIZE formatting is 0 (below minQty for {symbol})")
-        if stop_price <= 0:
+        if trigger_px <= 0:
             raise ValueError("stop_price must be positive")
-        params = {
+        # closePosition closes full one-way position; no quantity/reduceOnly (Binance rules).
+        params: dict[str, Any] = {
+            "algoType": "CONDITIONAL",
             "symbol": symbol,
             "side": _side_to_binance(side, for_reduce_only=True),
             "type": "STOP_MARKET",
-            "quantity": quantity,
-            "stopPrice": stop_price,
-            "reduceOnly": True,
-            "closePosition": False,
+            "triggerPrice": trigger_px,
             "workingType": "CONTRACT_PRICE",
-            "newClientOrderId": client_order_id,
+            "closePosition": True,
+            "clientAlgoId": client_order_id[:36],
         }
-        return self._post_order(params)
+        resp = self._post_algo_order(params)
+        if not isinstance(resp, dict):
+            raise RuntimeError(f"Unexpected algo order response: {type(resp).__name__}")
+        return self._normalize_algo_response(resp)
+
+    def place_take_profit_market_order(
+        self,
+        symbol: str,
+        side: Side,
+        quantity: float,
+        take_profit_price: float,
+        client_order_id: str,
+    ) -> dict:
+        """Place TAKE_PROFIT_MARKET via Algo API (closePosition)."""
+        quantity = self.format_quantity(symbol, quantity)
+        trigger_px = self.format_price(symbol, take_profit_price)
+        if quantity <= 0:
+            raise ValueError(f"quantity after LOT_SIZE formatting is 0 (below minQty for {symbol})")
+        if trigger_px <= 0:
+            raise ValueError("take_profit_price must be positive")
+        params: dict[str, Any] = {
+            "algoType": "CONDITIONAL",
+            "symbol": symbol,
+            "side": _side_to_binance(side, for_reduce_only=True),
+            "type": "TAKE_PROFIT_MARKET",
+            "triggerPrice": trigger_px,
+            "workingType": "CONTRACT_PRICE",
+            "closePosition": True,
+            "clientAlgoId": client_order_id[:36],
+        }
+        resp = self._post_algo_order(params)
+        if not isinstance(resp, dict):
+            raise RuntimeError(f"Unexpected algo order response: {type(resp).__name__}")
+        return self._normalize_algo_response(resp)
 
     def cancel_order(self, symbol: str, order_id: str) -> dict:
-        """Cancel order. Returns raw response dict."""
-        params = {
-            "symbol": symbol,
-            "orderId": order_id,
-        }
-        return self._request("DELETE", "/fapi/v1/order", params)
+        """Cancel order. SL/TP are algo orders (algoId); fallback to classic orderId."""
+        try:
+            algo_id = int(order_id)
+        except (TypeError, ValueError):
+            return self._request(
+                "DELETE", "/fapi/v1/order", {"symbol": symbol, "orderId": order_id}
+            )
+        try:
+            resp = self._request(
+                "DELETE", "/fapi/v1/algoOrder", {"symbol": symbol, "algoId": algo_id}
+            )
+            if isinstance(resp, dict) and "orderId" not in resp and "algoId" in resp:
+                return {**resp, "orderId": str(resp["algoId"])}
+            return resp
+        except RuntimeError as e:
+            body = str(e).lower()
+            if "-2011" in body or "unknown order" in body or "does not exist" in body:
+                return self._request(
+                    "DELETE", "/fapi/v1/order", {"symbol": symbol, "orderId": order_id}
+                )
+            raise
 
     def get_position(self, symbol: str) -> dict:
         """Fetch position info for symbol. Returns raw position dict or {} if none."""
@@ -243,6 +302,15 @@ class BinanceExecutionClient:
         if not isinstance(data, list):
             return []
         return data
+
+    def get_open_algo_orders(self, symbol: str) -> list[dict]:
+        """GET /fapi/v1/openAlgoOrders — conditional SL/TP (not in openOrders)."""
+        data = self._request(
+            "GET",
+            "/fapi/v1/openAlgoOrders",
+            {"symbol": symbol, "algoType": "CONDITIONAL"},
+        )
+        return data if isinstance(data, list) else []
 
     def get_user_trades(self, symbol: str, limit: int = 20) -> list[dict]:
         """GET /fapi/v1/userTrades. Returns list of trade dicts (most recent first)."""

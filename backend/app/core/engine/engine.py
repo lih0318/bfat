@@ -163,6 +163,7 @@ class BFATEngine:
         self._system_log = system_log_repository
         self._symbol = symbol
         self._current_stop_order_id: str | None = None
+        self._current_tp_algo_id: str | None = None
         self._current_take_profit: float | None = None
         self._last_signal_candle_ts: str = ""
         self._last_skip_reason: str | None = None
@@ -182,6 +183,8 @@ class BFATEngine:
                 raise RuntimeError("Inconsistent state: FLAT with position")
             if self._current_stop_order_id is not None:
                 raise RuntimeError("Invariant: FLAT must have _current_stop_order_id None")
+            if self._current_tp_algo_id is not None:
+                raise RuntimeError("Invariant: FLAT must have _current_tp_algo_id None")
 
     def evaluate_for_insight(self, candles: list[dict]) -> None:
         """Run strategy evaluation to populate Insight only. No orders, no position changes."""
@@ -376,6 +379,45 @@ class BFATEngine:
                     raise RuntimeError(
                         "Stop order failed after entry filled; position flattened"
                     ) from e
+                tp_algo_id: str | None = None
+                if signal.take_profit is not None and float(signal.take_profit) > 0:
+                    tp_id = _generate_client_order_id("bfat_tp")
+                    try:
+                        tp_resp = self._execution.place_take_profit_market_order(
+                            self._symbol,
+                            signal.side,
+                            actual_size,
+                            float(signal.take_profit),
+                            tp_id,
+                        )
+                        if not tp_resp or "orderId" not in tp_resp:
+                            raise RuntimeError("TAKE_PROFIT_MARKET placement failed")
+                        tp_algo_id = _validate_stop_response(tp_resp)
+                        logger.info(
+                            "[TP_ORDER_PLACED]",
+                            extra={
+                                "orderId": tp_resp.get("orderId"),
+                                "takeProfit": signal.take_profit,
+                            },
+                        )
+                    except Exception as e:
+                        try:
+                            self._execution.cancel_order(
+                                self._symbol, self._current_stop_order_id
+                            )
+                        except Exception:
+                            pass
+                        self._current_stop_order_id = None
+                        _close_position_flatten(
+                            self._execution,
+                            self._symbol,
+                            signal.side,
+                            actual_size,
+                        )
+                        self._state_machine.rollback_entry()
+                        raise RuntimeError(
+                            "Take-profit algo failed after SL placed; SL cancelled, position flattened"
+                        ) from e
                 position = Position(
                     symbol=self._symbol,
                     side=signal.side,
@@ -391,6 +433,11 @@ class BFATEngine:
                 try:
                     self._state_machine.on_entry_filled(position)
                 except Exception as e:
+                    if tp_algo_id:
+                        try:
+                            self._execution.cancel_order(self._symbol, tp_algo_id)
+                        except Exception:
+                            pass
                     self._execution.cancel_order(
                         self._symbol, self._current_stop_order_id
                     )
@@ -404,6 +451,7 @@ class BFATEngine:
                     raise RuntimeError(
                         "State transition failed after entry; position flattened"
                     ) from e
+                self._current_tp_algo_id = tp_algo_id
                 self._last_signal_candle_ts = signal.signal_candle_ts
                 self._current_take_profit = signal.take_profit
                 self._check_state_consistency()
@@ -415,7 +463,8 @@ class BFATEngine:
                 raise RuntimeError("Entry failure") from e
             return
 
-        # ── OPEN → fixed SL on exchange; optional logical take-profit at candle close ──
+        # ── OPEN → SL on exchange; range TP via TAKE_PROFIT_MARKET (intrabar, immediate).
+        # Logical candle-close TP only if no exchange TP algo (fallback).
         if self._state_machine.state == PositionState.OPEN:
             pos = self._state_machine.position
             if pos is None:
@@ -428,9 +477,9 @@ class BFATEngine:
                     pos.size,
                 )
                 raise RuntimeError("CRITICAL: stop order missing while OPEN")
-            close_px = candles[-1]["close"]
             tp = pos.take_profit
-            if tp is not None:
+            if tp is not None and not self._current_tp_algo_id:
+                close_px = candles[-1]["close"]
                 hit = (
                     pos.side == Side.LONG and close_px >= tp
                 ) or (
@@ -441,7 +490,7 @@ class BFATEngine:
                         self._market_close_open_position(
                             equity,
                             event="take_profit_hit",
-                            message=f"Take profit at close {close_px:.4f} (target {tp:.4f})",
+                            message=f"Take profit (candle fallback) close={close_px:.4f} target={tp:.4f}",
                         )
                     except Exception as e:
                         self._system_log.insert(
@@ -462,6 +511,18 @@ class BFATEngine:
         pos = self._state_machine.position
         if pos is None:
             return
+        if self._current_tp_algo_id:
+            try:
+                self._execution.cancel_order(self._symbol, self._current_tp_algo_id)
+            except Exception:
+                pass
+        if self._current_stop_order_id:
+            try:
+                self._execution.cancel_order(
+                    self._symbol, self._current_stop_order_id
+                )
+            except Exception:
+                pass
         close_side = Side.SHORT if pos.side == Side.LONG else Side.LONG
         resp = self._execution.place_market_order(
             self._symbol,
@@ -604,6 +665,13 @@ class BFATEngine:
             correlation_id=pos.correlation_id,
         )
         self._equity_repo.insert(ts=_ts(), equity=equity)
+        if self._current_tp_algo_id:
+            try:
+                self._execution.cancel_order(
+                    self._symbol, self._current_tp_algo_id
+                )
+            except Exception:
+                pass
         if self._current_stop_order_id:
             try:
                 self._execution.cancel_order(
@@ -616,5 +684,6 @@ class BFATEngine:
         except Exception as e:
             raise RuntimeError("State transition failed") from e
         self._current_stop_order_id = None
+        self._current_tp_algo_id = None
         self._current_take_profit = None
         self._check_state_consistency()

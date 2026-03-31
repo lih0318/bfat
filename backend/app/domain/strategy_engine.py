@@ -10,9 +10,12 @@ Features:
   * Cooldown after soft regime transitions (2 bars for TRENDING, 1 bar for RANGING)
 """
 
+import logging
 from typing import Any, Optional, Union
 
 from app.core.strategy.breakout import BreakoutStrategy
+
+logger = logging.getLogger(__name__)
 from app.domain.enums import Side
 from app.domain.regime_classifier import RegimeClassifier, _adx
 from app.domain.signal import CloseSignal, Signal
@@ -164,14 +167,25 @@ class StrategyEngine:
         return signal
 
     def evaluate_for_insight(self, candles: list[dict]) -> None:
-        """Insight seeding — evaluate BOTH strategies so both sights are available."""
+        """Insight seeding — evaluate BOTH strategies so both sights are available.
+
+        Open positions skip active-strategy ``evaluate()`` (no new entries), so Insight
+        depends on this path. Range metrics (High/Mid/Low) must stay fresh: run range
+        first and isolate failures so a breakout error cannot block range updates.
+        """
         regime = self.regime_classifier.evaluate(candles)
         rc_details = self.regime_classifier.get_last_details()
         self._active_regime = regime
         self._last_score = rc_details.get("score", 0)
         self._last_position_scale = _position_scale_for_score(self._last_score)
-        self.breakout_strategy.evaluate(candles)
-        self.range_strategy.evaluate(candles)
+        try:
+            self.range_strategy.evaluate(candles)
+        except Exception:
+            logger.exception("evaluate_for_insight: range_strategy.evaluate failed")
+        try:
+            self.breakout_strategy.evaluate(candles)
+        except Exception:
+            logger.exception("evaluate_for_insight: breakout_strategy.evaluate failed")
 
     def get_last_evaluation_details(self) -> dict:
         """Merged insight: active strategy + trend_reference + range_reference."""
