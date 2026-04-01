@@ -1,51 +1,51 @@
 @import "tailwindcss";
 
 :root {
-  font-family: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
-  line-height: 1.5;
+  font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  line-height: 1.6;
   font-weight: 400;
-  color: #e2e4e9;
-  background: linear-gradient(168deg, #0b0f14 0%, #080b10 50%, #0d1018 100%);
+  color: #f3f6fb;
+  background: linear-gradient(168deg, #0b1118 0%, #0d131c 50%, #101722 100%);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 
   /* ─── Surface & Depth ─── */
-  --bg-base: #0b0f14;
-  --bg-card: rgba(16, 21, 30, 0.92);
-  --bg-elevated: rgba(22, 28, 38, 0.95);
-  --bg-glass: rgba(18, 24, 34, 0.6);
-  --border: rgba(45, 55, 72, 0.45);
-  --border-subtle: rgba(45, 55, 72, 0.25);
+  --bg-base: #0b1118;
+  --bg-card: rgba(18, 25, 36, 0.96);
+  --bg-elevated: rgba(28, 36, 50, 0.98);
+  --bg-glass: rgba(22, 30, 43, 0.72);
+  --border: rgba(124, 145, 173, 0.26);
+  --border-subtle: rgba(124, 145, 173, 0.16);
 
   /* ─── Brand Palette ─── */
-  --accent: #c9a84c;
-  --accent-hover: #dbb95e;
-  --accent-muted: rgba(201, 168, 76, 0.15);
-  --wealth-green: #3ecf8e;
-  --wealth-green-muted: rgba(62, 207, 142, 0.12);
-  --burgundy: #c45b6c;
-  --burgundy-muted: rgba(196, 91, 108, 0.12);
+  --accent: #f0c96a;
+  --accent-hover: #f6d88d;
+  --accent-muted: rgba(240, 201, 106, 0.18);
+  --wealth-green: #45d39c;
+  --wealth-green-muted: rgba(69, 211, 156, 0.16);
+  --burgundy: #d36f82;
+  --burgundy-muted: rgba(211, 111, 130, 0.16);
 
   /* ─── Semantic Status ─── */
-  --positive: #3ecf8e;
-  --positive-muted: rgba(62, 207, 142, 0.12);
-  --negative: #c45b6c;
-  --negative-muted: rgba(196, 91, 108, 0.12);
-  --warning: #e0a458;
-  --warning-muted: rgba(224, 164, 88, 0.12);
+  --positive: #45d39c;
+  --positive-muted: rgba(69, 211, 156, 0.16);
+  --negative: #d36f82;
+  --negative-muted: rgba(211, 111, 130, 0.16);
+  --warning: #efb867;
+  --warning-muted: rgba(239, 184, 103, 0.16);
 
   /* ─── Text ─── */
-  --text: #e2e4e9;
-  --text-secondary: #a0a8b8;
-  --text-muted: #6b7689;
+  --text: #f3f6fb;
+  --text-secondary: #c8d1de;
+  --text-muted: #98a4b8;
 
   /* ─── Effects ─── */
-  --shadow: 0 2px 16px rgba(0, 0, 0, 0.32), 0 0 1px rgba(0, 0, 0, 0.2);
-  --shadow-lg: 0 8px 40px rgba(0, 0, 0, 0.45), 0 0 1px rgba(0, 0, 0, 0.25);
-  --glow-accent: 0 0 20px rgba(201, 168, 76, 0.08);
-  --glow-green: 0 0 20px rgba(62, 207, 142, 0.06);
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.28), 0 1px 1px rgba(0, 0, 0, 0.22);
+  --shadow-lg: 0 18px 56px rgba(0, 0, 0, 0.38), 0 1px 1px rgba(0, 0, 0, 0.24);
+  --glow-accent: 0 0 24px rgba(240, 201, 106, 0.12);
+  --glow-green: 0 0 24px rgba(69, 211, 156, 0.1);
   --radius: 12px;
   --radius-sm: 8px;
   --radius-lg: 16px;
@@ -97,6 +97,7 @@ body {
   min-width: 320px;
   height: 100%;
   min-height: 100vh;
+  font-size: 16px;
   overflow-x: hidden;
   word-break: break-word;
   overflow-wrap: break-word;
@@ -112,12 +113,14 @@ body {
 
 button {
   font-family: inherit;
+  font-size: 0.95rem;
   cursor: pointer;
 }
 
 input,
 select {
   font-family: inherit;
+  font-size: 0.98rem;
   max-width: 100%;
 }
 
@@ -145,10 +148,10 @@ select {
   align-items: center;
   gap: 4px;
   border-radius: var(--radius-sm);
-  padding: 3px 10px;
-  font-size: 11px;
+  padding: 4px 10px;
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.03em;
   text-transform: uppercase;
 }
 
@@ -160,6 +163,7 @@ select {
   border-radius: var(--radius);
   padding: 10px 20px;
   font-weight: 600;
+  font-size: 0.95rem;
   transition: all 0.2s;
   touch-action: manipulation;
 }
@@ -181,10 +185,10 @@ select {
 }
 
 .section-title {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.09em;
   color: var(--text-muted);
 }
 
