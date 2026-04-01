@@ -7,7 +7,8 @@ Features:
   * Regime-switch PnL gate: losing → close, winning → hold + cooldown
   * Strong-momentum conditional immediate entry after regime switch
   * Score-based position sizing (0.7x / 1.0x / 1.2x)
-  * Cooldown after soft regime transitions (2 bars for TRENDING, 1 bar for RANGING)
+  * Configurable cooldown per regime (TRENDING 1 bar / RANGING 0 bars)
+  * `evaluate_ranging_intrabar` for live-bar range entry without waiting for close
 """
 
 import logging
@@ -26,8 +27,8 @@ _MOMENTUM_VOL_Z_THRESHOLD = 1.0
 _MOMENTUM_BODY_RATIO_THRESHOLD = 0.6
 _MOMENTUM_MIN_CONDITIONS = 2
 
-_COOLDOWN_BARS = 2  # TRENDING: weak-momentum block, winning-hold after switch to TRENDING
-_COOLDOWN_BARS_RANGING = 1  # winning-hold after switch to RANGING (lighter pause)
+_COOLDOWN_BARS_TRENDING = 1  # reduced from 2 — one bar pause after weak-momentum switch to TRENDING
+_COOLDOWN_BARS_RANGING = 0   # range intrabar entry allowed immediately after switch
 
 # Strategy-driven exit thresholds (regime_classifier metrics)
 _ADX_WEAK_EXIT = 18.0
@@ -61,10 +62,11 @@ class StrategyEngine:
 
     * Only ONE strategy is active at a time.
     * Regime change with losing position → CloseSignal.
-    * Regime change with winning position → hold + cooldown (1 bar if new regime RANGING, else 2).
+    * Regime change with winning position → hold + cooldown.
     * With an open position: optional CloseSignal from ADX/BB/structure exit rules (no new entries).
     * Strong-momentum required only when switching TO TRENDING; RANGING allows immediate eval.
     * Score-based position sizing applied to every entry signal.
+    * `evaluate_ranging_intrabar` allows range entries inside a forming bar.
     """
 
     def __init__(self, symbol: str = "BTCUSDT") -> None:
@@ -114,7 +116,7 @@ class StrategyEngine:
                 if unrealized < 0:
                     return CloseSignal(reason="Regime Switch - Losing Position")
                 self._regime_switch_cooldown = (
-                    _COOLDOWN_BARS_RANGING if regime == "RANGING" else _COOLDOWN_BARS
+                    _COOLDOWN_BARS_RANGING if regime == "RANGING" else _COOLDOWN_BARS_TRENDING
                 )
                 self._last_skip_reason = "regime_switch_winning_hold"
                 return None
@@ -122,14 +124,15 @@ class StrategyEngine:
             # ── No position ──
             if regime == "TRENDING":
                 if not self._check_strong_momentum(candles):
-                    self._regime_switch_cooldown = _COOLDOWN_BARS
+                    self._regime_switch_cooldown = _COOLDOWN_BARS_TRENDING
                     self._last_skip_reason = "regime_switch_weak_momentum"
                     return None
             elif regime == "RANGING":
-                # No strong momentum requirement; reduced cooldown (1 bar) only
                 self._regime_switch_cooldown = _COOLDOWN_BARS_RANGING
-                self._last_skip_reason = "regime_switch_ranging_cooldown"
-                return None
+                if _COOLDOWN_BARS_RANGING > 0:
+                    self._last_skip_reason = "regime_switch_ranging_cooldown"
+                    return None
+                # cooldown == 0 → fall through to immediate evaluation
         else:
             self._active_regime = regime
 
@@ -186,6 +189,44 @@ class StrategyEngine:
             self.breakout_strategy.evaluate(candles)
         except Exception:
             logger.exception("evaluate_for_insight: breakout_strategy.evaluate failed")
+
+    def evaluate_ranging_intrabar(
+        self,
+        candles: list[dict],
+        live_bar: dict,
+        current_position: Any,
+    ) -> Optional[Signal]:
+        """Evaluate Range intrabar entry using the forming bar.
+
+        Only fires when:
+          * Last confirmed regime is RANGING
+          * No open position (FLAT)
+          * No cooldown remaining
+          * Kill switch not already checked here (engine handles that)
+
+        Returns Signal with position_scale applied, or None.
+        """
+        if self._active_regime != "RANGING":
+            return None
+        if current_position is not None:
+            return None
+        if self._regime_switch_cooldown > 0:
+            return None
+
+        signal = self.range_strategy.evaluate_intrabar(candles, live_bar)
+        if signal is None:
+            return None
+
+        position_scale = self._last_position_scale
+        return Signal(
+            symbol=signal.symbol,
+            side=signal.side,
+            signal_time=signal.signal_time,
+            signal_candle_ts=signal.signal_candle_ts,
+            stop_price=signal.stop_price,
+            take_profit=signal.take_profit,
+            position_scale=position_scale,
+        )
 
     def get_last_evaluation_details(self) -> dict:
         """Merged insight: active strategy + trend_reference + range_reference."""

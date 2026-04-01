@@ -1,7 +1,14 @@
-"""15m kline WebSocket stream for BFAT."""
+"""15m kline WebSocket stream for BFAT.
+
+Handles two data paths:
+  1. **Closed candle** (`k.x == true`) -> appended to buffer, triggers `on_candle_close`.
+  2. **Forming candle** (`k.x == false`) -> forwarded as live_bar snapshot to
+     `on_market_update` so the Range strategy can enter intrabar.
+"""
 
 import asyncio
 import json
+import logging
 from collections import deque
 from typing import Any, Callable
 
@@ -10,6 +17,7 @@ import websockets
 
 from app.core.engine.engine import CancelFailureError, NewStopPlacementError
 
+logger = logging.getLogger(__name__)
 
 BINANCE_WS_MAINNET = "wss://fstream.binance.com/ws"
 BINANCE_REST_MAINNET = "https://fapi.binance.com"
@@ -40,8 +48,34 @@ def _parse_closed_candle(msg: dict) -> dict | None:
         return None
 
 
+def _parse_forming_candle(msg: dict) -> dict | None:
+    """Extract live_bar snapshot from an in-progress kline update (`k.x == false`)."""
+    if msg.get("e") != "kline":
+        return None
+    k = msg.get("k")
+    if not isinstance(k, dict):
+        return None
+    if k.get("x"):
+        return None
+    try:
+        return {
+            "open": float(k["o"]),
+            "high": float(k["h"]),
+            "low": float(k["l"]),
+            "close": float(k["c"]),
+            "volume": float(k["v"]),
+            "timestamp": str(k["t"]),
+        }
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 class BinanceMarketStream:
-    """Subscribes to 15m kline stream, maintains candle buffer, calls engine on close."""
+    """Subscribes to 15m kline stream, maintains candle buffer, calls engine on close.
+
+    Additionally forwards forming-candle snapshots so the engine can evaluate
+    Range intrabar entries without waiting for bar close.
+    """
 
     def __init__(
         self,
@@ -89,7 +123,12 @@ class BinanceMarketStream:
             })
 
     async def _run_loop(self) -> None:
-        """Connect and process messages. Reconnect on disconnect."""
+        """Connect and process messages. Reconnect on disconnect.
+
+        Two paths per WS message:
+          1. Closed candle  -> buffer + on_candle_close + evaluate_for_insight
+          2. Forming candle -> on_market_update (Range intrabar only)
+        """
         url = f"{self._ws_base}/{self._symbol}@kline_15m"
         delay = 1.0
         while self._running:
@@ -107,6 +146,8 @@ class BinanceMarketStream:
                             break
                         try:
                             msg = json.loads(raw)
+
+                            # ── Path 1: closed candle ──
                             candle = _parse_closed_candle(msg)
                             if candle:
                                 self._candles.append(candle)
@@ -133,6 +174,30 @@ class BinanceMarketStream:
                                     self._engine.evaluate_for_insight(candles_list)
                                 except Exception:
                                     pass
+                                continue
+
+                            # ── Path 2: forming candle (intrabar) ──
+                            live_bar = _parse_forming_candle(msg)
+                            if live_bar and self._candles:
+                                candles_list = list(self._candles)
+                                try:
+                                    equity = self._equity_provider()
+                                except Exception:
+                                    equity = 0.0
+                                if equity <= 0:
+                                    continue
+                                try:
+                                    self._engine.on_market_update(
+                                        candles_list, live_bar, equity,
+                                    )
+                                except (CancelFailureError, NewStopPlacementError):
+                                    pass
+                                except RuntimeError:
+                                    self._running = False
+                                    raise
+                                except Exception:
+                                    logger.debug("on_market_update error", exc_info=True)
+
                         except json.JSONDecodeError:
                             continue
                         except websockets.ConnectionClosed:

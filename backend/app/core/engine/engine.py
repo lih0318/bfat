@@ -166,6 +166,7 @@ class BFATEngine:
         self._current_tp_algo_id: str | None = None
         self._current_take_profit: float | None = None
         self._last_signal_candle_ts: str = ""
+        self._last_intrabar_entry_bucket_ts: str = ""
         self._last_skip_reason: str | None = None
         self._pending_fallback_close: bool = False
 
@@ -189,6 +190,162 @@ class BFATEngine:
     def evaluate_for_insight(self, candles: list[dict]) -> None:
         """Run strategy evaluation to populate Insight only. No orders, no position changes."""
         self._strategy_engine.evaluate_for_insight(candles)
+
+    def on_market_update(
+        self, candles: list[dict], live_bar: dict, equity: float,
+    ) -> None:
+        """Handle a forming-candle update for Range intrabar entry.
+
+        Only attempts entry when FLAT + no same-bucket attempt already made.
+        The closed-candle `on_candle_close` path is never touched here.
+        """
+        self._last_skip_reason = None
+        try:
+            self._check_state_consistency()
+        except RuntimeError:
+            return
+        if self._state_machine.state != PositionState.FLAT:
+            return
+        if self._kill_switch.is_triggered():
+            self._last_skip_reason = "kill_switch_triggered"
+            return
+        bucket_ts = live_bar.get("timestamp", "")
+        if bucket_ts and bucket_ts == self._last_intrabar_entry_bucket_ts:
+            return
+        if bucket_ts and bucket_ts == self._last_signal_candle_ts:
+            return
+
+        signal = self._strategy_engine.evaluate_ranging_intrabar(
+            candles, live_bar, self._state_machine.position,
+        )
+        if signal is None:
+            return
+
+        logger.info(
+            "[INTRABAR_SIGNAL] side=%s bucket=%s", signal.side.value, bucket_ts,
+        )
+
+        atr_val = _atr(candles, ATR_PERIOD)
+        entry_price_est = live_bar["close"]
+
+        if signal.stop_price is not None:
+            stop_price_est = signal.stop_price
+        else:
+            if atr_val <= 0:
+                self._last_skip_reason = "atr_invalid"
+                return
+            stop_price_est = (
+                entry_price_est - INITIAL_STOP_ATR * atr_val
+                if signal.side == Side.LONG
+                else entry_price_est + INITIAL_STOP_ATR * atr_val
+            )
+        position_size = self._risk_manager.calculate_position_size(
+            equity, entry_price_est, stop_price_est,
+        )
+        position_size *= signal.position_scale
+        if position_size <= 0:
+            self._last_skip_reason = "position_size_zero"
+            return
+
+        try:
+            self._state_machine.on_signal(signal)
+            entry_id = _generate_client_order_id("bfat_intra")
+            mkt_resp = _validate_response_dict(
+                self._execution.place_market_order(
+                    self._symbol, signal.side, position_size, entry_id,
+                )
+            )
+            status = mkt_resp.get("status")
+            if status != "FILLED":
+                self._state_machine.rollback_entry()
+                raise RuntimeError(f"Intrabar entry not FILLED: status={status}")
+            try:
+                _validate_market_response(mkt_resp)
+                actual_entry_price, actual_size = _parse_fill(mkt_resp)
+            except RuntimeError as e:
+                flatten_size = float(mkt_resp.get("executedQty", 0)) or position_size
+                _close_position_flatten(self._execution, self._symbol, signal.side, flatten_size)
+                self._state_machine.rollback_entry()
+                raise RuntimeError("Intrabar entry response invalid; flattened") from e
+
+            stop_price = signal.stop_price if signal.stop_price is not None else (
+                actual_entry_price - INITIAL_STOP_ATR * atr_val
+                if signal.side == Side.LONG
+                else actual_entry_price + INITIAL_STOP_ATR * atr_val
+            )
+            stop_id = _generate_client_order_id("bfat_stop")
+            try:
+                stop_resp = self._execution.place_stop_market_order(
+                    self._symbol, signal.side, actual_size, stop_price, stop_id,
+                )
+                if not stop_resp or "orderId" not in stop_resp:
+                    raise RuntimeError("STOP order placement failed")
+                self._current_stop_order_id = _validate_stop_response(stop_resp)
+            except Exception as e:
+                _close_position_flatten(self._execution, self._symbol, signal.side, actual_size)
+                self._state_machine.rollback_entry()
+                raise RuntimeError("Stop failed after intrabar entry; flattened") from e
+
+            tp_algo_id: str | None = None
+            if signal.take_profit is not None and float(signal.take_profit) > 0:
+                tp_id = _generate_client_order_id("bfat_tp")
+                try:
+                    tp_resp = self._execution.place_take_profit_market_order(
+                        self._symbol, signal.side, actual_size, float(signal.take_profit), tp_id,
+                    )
+                    if not tp_resp or "orderId" not in tp_resp:
+                        raise RuntimeError("TP placement failed")
+                    tp_algo_id = _validate_stop_response(tp_resp)
+                except Exception as e:
+                    try:
+                        self._execution.cancel_order(self._symbol, self._current_stop_order_id)
+                    except Exception:
+                        pass
+                    self._current_stop_order_id = None
+                    _close_position_flatten(self._execution, self._symbol, signal.side, actual_size)
+                    self._state_machine.rollback_entry()
+                    raise RuntimeError("TP failed after intrabar SL; flattened") from e
+
+            position = Position(
+                symbol=self._symbol,
+                side=signal.side,
+                size=actual_size,
+                entry_price=actual_entry_price,
+                stop_price=stop_price,
+                initial_stop_price=stop_price,
+                stop_phase=StopPhase.INITIAL,
+                entry_time=_ts(),
+                correlation_id=entry_id,
+                take_profit=signal.take_profit,
+            )
+            try:
+                self._state_machine.on_entry_filled(position)
+            except Exception as e:
+                if tp_algo_id:
+                    try:
+                        self._execution.cancel_order(self._symbol, tp_algo_id)
+                    except Exception:
+                        pass
+                self._execution.cancel_order(self._symbol, self._current_stop_order_id)
+                _close_position_flatten(self._execution, self._symbol, signal.side, actual_size)
+                self._state_machine.rollback_entry()
+                raise RuntimeError("State transition failed after intrabar entry; flattened") from e
+
+            self._current_tp_algo_id = tp_algo_id
+            self._last_signal_candle_ts = bucket_ts
+            self._last_intrabar_entry_bucket_ts = bucket_ts
+            self._current_take_profit = signal.take_profit
+            self._check_state_consistency()
+            logger.info(
+                "[INTRABAR_ENTRY_FILLED] side=%s price=%.4f size=%.6f bucket=%s",
+                signal.side.value, actual_entry_price, actual_size, bucket_ts,
+            )
+        except RuntimeError:
+            raise
+        except Exception as e:
+            if self._state_machine.state == PositionState.ENTERING:
+                self._state_machine.rollback_entry()
+            raise RuntimeError("Intrabar entry failure") from e
 
     def on_candle_close(self, candles: list[dict], equity: float) -> None:
         """Handle candle close: evaluate strategy, entries, CloseSignal exits, logical TP."""

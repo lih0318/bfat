@@ -68,8 +68,8 @@ function fmt(v: number | null | undefined, digits = 2, suffix = ''): string {
 
 function MetricCard({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
-    <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] p-4 transition-colors">
-      <p className="text-[11px] uppercase tracking-wider text-[var(--text-muted)]">{label}</p>
+    <div className="card-elevated p-4">
+      <p className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">{label}</p>
       <p className={`mt-1 text-lg font-semibold tabular-nums ${accent ? 'text-[var(--accent)]' : ''}`}>{value}</p>
     </div>
   )
@@ -78,7 +78,7 @@ function MetricCard({ label, value, accent }: { label: string; value: string; ac
 function RefRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-baseline justify-between">
-      <span className="text-[11px] text-[var(--text-muted)]">{label}</span>
+      <span className="text-[10px] text-[var(--text-muted)]">{label}</span>
       <span className="text-xs font-medium tabular-nums">{value}</span>
     </div>
   )
@@ -110,8 +110,8 @@ export function InsightTab() {
 
   if (loading) {
     return (
-      <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-6 shadow-[var(--shadow)] ring-1 ring-white/5 backdrop-blur-sm">
-        <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-[var(--text-muted)]">Market Insight</h3>
+      <div className="card p-6">
+        <p className="section-title mb-4">Market Insight</p>
         <div className="flex items-center gap-3 text-[var(--text-muted)]">
           <div className="h-5 w-5 animate-spin-slow rounded-full border-2 border-[var(--border)] border-t-[var(--accent)]" />
           <span className="text-sm">Loading...</span>
@@ -124,11 +124,11 @@ export function InsightTab() {
   const isRanging = regime.toUpperCase() === 'RANGING'
   const isTrending = regime.toUpperCase() === 'TRENDING'
 
-  const regimeColors: Record<string, string> = {
-    TRENDING: 'bg-emerald-500/15 text-emerald-400 ring-emerald-500/30',
-    RANGING: 'bg-amber-500/15 text-amber-400 ring-amber-500/30',
-  }
-  const regimeClass = regimeColors[regime.toUpperCase()] ?? 'bg-[var(--border)]/30 text-[var(--text-muted)] ring-[var(--border)]'
+  const regimeClass = regime.toUpperCase() === 'TRENDING'
+    ? 'bg-[var(--positive-muted)] text-[var(--positive)]'
+    : regime.toUpperCase() === 'RANGING'
+      ? 'bg-[var(--accent-muted)] text-[var(--accent)]'
+      : 'bg-[var(--border)]/30 text-[var(--text-muted)]'
 
   const tr = data?.trend_reference
   const rr = data?.range_reference
@@ -137,38 +137,31 @@ export function InsightTab() {
   return (
     <div className="space-y-4">
 
-      {/* ── Header ───────────────────────────── */}
-      <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-6 shadow-[var(--shadow)] ring-1 ring-white/5 backdrop-blur-sm">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--text-muted)]">Market Insight</h3>
-          <div className="flex items-center gap-3">
-            <span className={`rounded-lg px-3 py-1 text-xs font-bold uppercase tracking-wider ring-1 ${regimeClass}`}>
+      {/* Header */}
+      <div className="card p-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="section-title">Market Insight</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`badge ${regimeClass}`}>
               {regime}
               {isTrending && rc?.trend_direction && rc.trend_direction !== 'neutral' && (
-                <span className="ml-1.5 font-normal normal-case">
+                <span className="ml-1.5 font-normal normal-case text-[var(--text-secondary)]">
                   {rc.trend_direction === 'up' ? '↑ Up' : '↓ Down'}
                 </span>
               )}
             </span>
             {data?.regime_score != null && (
-              <span className="rounded-md bg-[var(--bg-elevated)] px-2 py-1 text-[11px] font-medium text-[var(--text-muted)] ring-1 ring-[var(--border)]">
-                Score {data.regime_score}/3
-              </span>
+              <span className="badge bg-[var(--bg-elevated)] text-[var(--text-muted)]">Score {data.regime_score}/3</span>
             )}
             {data?.position_scale != null && data.position_scale !== 1.0 && (
-              <span className="rounded-md bg-[var(--bg-elevated)] px-2 py-1 text-[11px] font-medium text-[var(--text-muted)] ring-1 ring-[var(--border)]">
-                Size {data.position_scale}x
-              </span>
+              <span className="badge bg-[var(--bg-elevated)] text-[var(--text-muted)]">Size {data.position_scale}x</span>
             )}
             {(data?.cooldown_remaining ?? 0) > 0 && (
-              <span className="rounded-md bg-orange-500/10 px-2 py-1 text-[11px] font-medium text-orange-400 ring-1 ring-orange-500/30">
-                Cooldown {data!.cooldown_remaining}
-              </span>
+              <span className="badge bg-[var(--warning-muted)] text-[var(--warning)]">Cooldown {data!.cooldown_remaining}</span>
             )}
           </div>
         </div>
 
-        {/* Regime classifier detail */}
         {rc && (
           <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-[var(--text-muted)]">
             <span>ADX <span className="font-medium text-[var(--accent)]">{fmt(rc.adx, 1)}</span></span>
@@ -179,29 +172,27 @@ export function InsightTab() {
         )}
       </div>
 
-      {/* ── Main metrics (regime-specific) ──── */}
-      <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-6 shadow-[var(--shadow)] ring-1 ring-white/5 backdrop-blur-sm">
-        <p className="mb-4 text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+      {/* Main Metrics */}
+      <div className="card p-6">
+        <p className="section-title mb-4">
           {isRanging ? 'Range Analysis' : isTrending ? 'Trend Analysis' : 'Analysis'}
         </p>
 
         {isRanging ? (
-          /* ── RANGING main: range bounds, RSI, vol z ── */
           <div className="space-y-4">
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               <MetricCard label="Range High" value={fmt(data?.range_high ?? rr?.range_high, 2)} />
               <MetricCard label="Range Low" value={fmt(data?.range_low ?? rr?.range_low, 2)} />
               <MetricCard label="Range Mid" value={fmt(data?.range_mid ?? rr?.range_mid, 2)} />
             </div>
-            <div className="grid gap-4 sm:grid-cols-3">
+            <div className="grid gap-3 sm:grid-cols-3">
               <MetricCard label="RSI (14)" value={fmt(data?.rsi ?? rr?.rsi, 2)} accent />
               <MetricCard label="Volume Z-score" value={fmt(data?.volume_zscore ?? rr?.volume_zscore, 2)} />
               <MetricCard label="Close" value={fmt(data?.close_price ?? rr?.close_price, 2)} />
             </div>
           </div>
         ) : (
-          /* ── TRENDING main: vol score, BB%, ATR, vol ratio ── */
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <MetricCard label="Volatility Score" value={fmt(data?.volatility_score ?? tr?.volatility_score, 4)} />
             <MetricCard label="BB Width %ile" value={fmt(data?.bb_width_percentile ?? tr?.bb_width_percentile, 2, '%')} />
             <MetricCard label="ATR (14)" value={fmt(data?.atr_value ?? tr?.atr_value, 2)} accent />
@@ -210,14 +201,12 @@ export function InsightTab() {
         )}
       </div>
 
-      {/* ── Reference block (other sight) ──── */}
-      <div className="rounded-2xl border border-[var(--border)]/50 bg-[var(--bg-card)]/60 p-5 shadow-[var(--shadow)] ring-1 ring-white/5 backdrop-blur-sm">
-        <p className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+      {/* Reference Block */}
+      <div className="card p-5" style={{ opacity: 0.85 }}>
+        <p className="section-title mb-3">
           {isRanging ? 'Trend Reference' : 'Range Reference'}
         </p>
-
         {isRanging ? (
-          /* show trend reference when RANGING */
           <div className="grid gap-x-6 gap-y-2 sm:grid-cols-2 lg:grid-cols-4">
             <RefRow label="Volatility" value={fmt(tr?.volatility_score, 4)} />
             <RefRow label="BB %ile" value={fmt(tr?.bb_width_percentile, 2) + '%'} />
@@ -225,7 +214,6 @@ export function InsightTab() {
             <RefRow label="Vol Ratio" value={fmt(tr?.volume_ratio, 2) + 'x'} />
           </div>
         ) : (
-          /* show range reference when TRENDING */
           <div className="grid gap-x-6 gap-y-2 sm:grid-cols-2 lg:grid-cols-3">
             <RefRow label="Range" value={`${fmt(rr?.range_low, 0)} – ${fmt(rr?.range_high, 0)}`} />
             <RefRow label="RSI" value={fmt(rr?.rsi, 2)} />
@@ -234,33 +222,33 @@ export function InsightTab() {
         )}
       </div>
 
-      {/* ── Entry conditions (satisfied / not satisfied) ── */}
+      {/* Entry Conditions */}
       {data?.entry_conditions && data.entry_conditions.length > 0 && (
-        <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-6 shadow-[var(--shadow)] ring-1 ring-white/5 backdrop-blur-sm">
-          <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Entry conditions</p>
+        <div className="card p-6">
+          <p className="section-title mb-3">Entry Conditions</p>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-[var(--border)] text-left text-[11px] uppercase tracking-wider text-[var(--text-muted)]">
-                  <th className="pb-2 pr-3 font-medium">Status</th>
-                  <th className="pb-2 pr-3 font-medium">Condition</th>
-                  <th className="pb-2 pr-3 font-medium">Required</th>
-                  <th className="pb-2 font-medium">Actual</th>
+                <tr className="border-b border-[var(--border-subtle)] text-left text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
+                  <th className="pb-2.5 pr-3 font-semibold">Status</th>
+                  <th className="pb-2.5 pr-3 font-semibold">Condition</th>
+                  <th className="pb-2.5 pr-3 font-semibold">Required</th>
+                  <th className="pb-2.5 font-semibold">Actual</th>
                 </tr>
               </thead>
               <tbody>
                 {data.entry_conditions.map((c, i) => (
-                  <tr key={i} className={`border-b border-[var(--border)]/50 ${c.met ? 'text-[var(--positive)]' : 'text-[var(--text-muted)]'}`}>
+                  <tr key={i} className="border-b border-[var(--border-subtle)]/50">
                     <td className="py-2.5 pr-3">
                       {c.met ? (
-                        <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-[var(--positive)]/15 text-[var(--positive)]" aria-label="Met">✓</span>
+                        <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-[var(--positive-muted)] text-[var(--positive)] text-xs">✓</span>
                       ) : (
-                        <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-[var(--negative)]/15 text-[var(--negative)]" aria-label="Not met">✗</span>
+                        <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-[var(--negative-muted)] text-[var(--negative)] text-xs">✗</span>
                       )}
                     </td>
-                    <td className="py-2.5 pr-3 font-medium">{c.label}</td>
+                    <td className={`py-2.5 pr-3 font-medium ${c.met ? 'text-[var(--text)]' : 'text-[var(--text-muted)]'}`}>{c.label}</td>
                     <td className="py-2.5 pr-3 tabular-nums text-[var(--text-muted)]">{c.required}</td>
-                    <td className="py-2.5 tabular-nums">{c.actual}</td>
+                    <td className={`py-2.5 tabular-nums ${c.met ? 'text-[var(--positive)]' : 'text-[var(--text-muted)]'}`}>{c.actual}</td>
                   </tr>
                 ))}
               </tbody>
@@ -269,24 +257,24 @@ export function InsightTab() {
         </div>
       )}
 
-      {/* ── Skip Reason ──────────────────── */}
+      {/* Skip Reason */}
       {data?.skip_reason && (
-        <div className="flex items-center gap-2.5 rounded-2xl border border-amber-500/25 bg-amber-500/5 px-5 py-3.5 shadow-[var(--shadow)] ring-1 ring-amber-500/10 backdrop-blur-sm">
-          <span className="text-amber-400">⏸</span>
-          <span className="text-sm font-medium text-amber-300/90">
-            Signal skipped: <span className="font-normal text-amber-200/70">{data.skip_reason}</span>
+        <div className="flex items-center gap-2.5 rounded-xl border border-[var(--warning)]/20 bg-[var(--warning-muted)] px-5 py-3.5">
+          <span className="text-[var(--warning)]">⏸</span>
+          <span className="text-sm text-[var(--warning)]">
+            Signal skipped: <span className="font-normal text-[var(--text-secondary)]">{data.skip_reason}</span>
           </span>
         </div>
       )}
 
-      {/* ── Engine Reasoning ──────────────── */}
+      {/* Engine Reasoning */}
       {data?.engine_reasoning && data.engine_reasoning.length > 0 && (
-        <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-6 shadow-[var(--shadow)] ring-1 ring-white/5 backdrop-blur-sm">
-          <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Engine Reasoning</p>
+        <div className="card p-6">
+          <p className="section-title mb-3">Engine Reasoning</p>
           <ul className="space-y-2">
             {data.engine_reasoning.map((r, i) => (
-              <li key={i} className="flex items-start gap-2.5 text-sm leading-relaxed">
-                <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--accent)]" />
+              <li key={i} className="flex items-start gap-2.5 text-sm leading-relaxed text-[var(--text-secondary)]">
+                <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--accent)]" />
                 <span>{r}</span>
               </li>
             ))}

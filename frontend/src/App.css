@@ -1,5 +1,4 @@
-.app-v2 {
-  display: flex;
-  flex-direction: column;
-  min-height: 100vh;
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+  font-family: "IBM Plex Mono", "IBM Plex Sans", monospace;
 }

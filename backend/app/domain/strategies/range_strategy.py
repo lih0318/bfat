@@ -2,6 +2,12 @@
 
 Enters LONG near range low, SHORT near range high, with RSI and volume
 Z-score confirmation.  All rolling windows are past-only (no lookahead).
+
+Two evaluation modes:
+  * **close** (`evaluate`)   — run on closed candles (legacy path).
+  * **intrabar** (`evaluate_intrabar`) — run on the forming bar's real-time
+    high/low/close while RSI / vol-z filters are taken from the last closed
+    candle.  Includes a minimum reward-to-risk filter to avoid late entries.
 """
 
 from typing import Any, Optional
@@ -18,6 +24,7 @@ STOP_BUFFER = 0.002
 RSI_LONG = 38
 RSI_SHORT = 62
 VOLUME_LOOKBACK = 20
+MIN_REWARD_RISK = 0.7  # intrabar: reject entry if reward/risk < this
 
 MINIMUM_CANDLES = max(RANGE_LOOKBACK + 1, RSI_PERIOD + 1, VOLUME_LOOKBACK + 1)
 
@@ -65,15 +72,94 @@ def _volume_zscore(candles: list[dict], period: int = VOLUME_LOOKBACK) -> Option
 # ─── Strategy ──────────────────────────────────────────────────────
 
 class RangeStrategy:
-    """Range mean-reversion strategy.  Enters near boundaries, targets mid."""
+    """Range mean-reversion strategy.  Enters near boundaries, targets mid.
+
+    Supports both candle-close evaluation and intrabar (live_bar) evaluation.
+    """
 
     def __init__(self, symbol: str = "BTCUSDT") -> None:
         self._symbol = symbol
         self._last_evaluation: dict = {}
+        self._cached_range: dict[str, float] = {}
+        self._cached_rsi: Optional[float] = None
+        self._cached_vol_z: Optional[float] = None
 
     def get_last_evaluation_details(self) -> dict:
         """Return last evaluation context for insight API."""
         return dict(self._last_evaluation)
+
+    # ── Shared helpers ──────────────────────────────────────────────
+
+    def _compute_range_and_filters(self, candles: list[dict]) -> Optional[dict]:
+        """Compute range bounds, RSI, vol_z from *closed* candles.
+
+        Returns dict with range_high/low/mid/rsi/vol_z or None if
+        insufficient data. Also caches values for intrabar reuse.
+        """
+        if len(candles) < MINIMUM_CANDLES:
+            return None
+        prev_bars = candles[-(RANGE_LOOKBACK + 1):-1]
+        range_high = max(c["high"] for c in prev_bars)
+        range_low = min(c["low"] for c in prev_bars)
+        range_mid = (range_high + range_low) / 2.0
+        rsi = _rsi(candles, RSI_PERIOD)
+        vol_z = _volume_zscore(candles, VOLUME_LOOKBACK)
+        result = {
+            "range_high": range_high,
+            "range_low": range_low,
+            "range_mid": range_mid,
+            "rsi": rsi,
+            "vol_z": vol_z,
+        }
+        self._cached_range = {"range_high": range_high, "range_low": range_low, "range_mid": range_mid}
+        self._cached_rsi = rsi
+        self._cached_vol_z = vol_z
+        return result
+
+    def _check_entry_conditions(
+        self, high: float, low: float, close: float,
+        range_high: float, range_low: float, range_mid: float,
+        rsi: Optional[float], vol_z: Optional[float],
+    ) -> tuple[bool, bool, list[dict]]:
+        """Evaluate entry masks.  Returns (long_signal, short_signal, entry_conditions)."""
+        low_threshold = range_low * (1 + ENTRY_THRESHOLD)
+        high_threshold = range_high * (1 - ENTRY_THRESHOLD)
+        near_low = low <= low_threshold
+        near_high = high >= high_threshold
+        rsi_oversold = rsi is not None and rsi < RSI_LONG
+        rsi_overbought = rsi is not None and rsi > RSI_SHORT
+        vol_quiet = vol_z is not None and vol_z < 1.0
+
+        long_signal = near_low and rsi_oversold and vol_quiet
+        short_signal = near_high and rsi_overbought and vol_quiet
+
+        rsi_str = f"{rsi:.2f}" if rsi is not None else "N/A"
+        vol_z_str = f"{vol_z:.2f}" if vol_z is not None else "N/A"
+
+        entry_conds = [
+            {"label": "Touch range low (LONG)", "required": f"low ≤ {low_threshold:.2f}", "actual": f"{low:.2f}", "met": near_low},
+            {"label": "Touch range high (SHORT)", "required": f"high ≥ {high_threshold:.2f}", "actual": f"{high:.2f}", "met": near_high},
+            {"label": "RSI oversold (LONG)", "required": f"< {RSI_LONG}", "actual": rsi_str, "met": rsi_oversold},
+            {"label": "RSI overbought (SHORT)", "required": f"> {RSI_SHORT}", "actual": rsi_str, "met": rsi_overbought},
+            {"label": "Volume Z < 1.0 (no spike)", "required": "< 1.0", "actual": vol_z_str, "met": vol_quiet},
+        ]
+        return long_signal, short_signal, entry_conds
+
+    @staticmethod
+    def _passes_min_rr(
+        side: Side, close: float,
+        stop: float, tp: float,
+    ) -> bool:
+        """Return True if the reward/risk ratio from *current price* >= MIN_REWARD_RISK."""
+        if side == Side.LONG:
+            risk = abs(close - stop)
+            reward = abs(tp - close)
+        else:
+            risk = abs(stop - close)
+            reward = abs(close - tp)
+        if risk <= 0:
+            return False
+        return (reward / risk) >= MIN_REWARD_RISK
 
     def _store_evaluation(
         self,
@@ -100,21 +186,23 @@ class RangeStrategy:
             self._last_evaluation["entry_conditions"] = entry_conditions
 
     def evaluate(self, candles: list[dict]) -> Optional[Signal]:
-        """Evaluate closed candles.  Returns Signal(LONG/SHORT) or None."""
+        """Evaluate on *closed* candles.  Returns Signal(LONG/SHORT) or None."""
         required_keys = ("open", "high", "low", "close", "volume")
         if not candles or not all(
             isinstance(c, dict) and all(k in c for k in required_keys)
             for c in candles
         ):
             return None
-        if len(candles) < MINIMUM_CANDLES:
+
+        ctx = self._compute_range_and_filters(candles)
+        if ctx is None:
             return None
 
-        # ── Range bounds (shift(1): current candle excluded) ──
-        prev_bars = candles[-(RANGE_LOOKBACK + 1) : -1]
-        range_high = max(c["high"] for c in prev_bars)
-        range_low = min(c["low"] for c in prev_bars)
-        range_mid = (range_high + range_low) / 2.0
+        range_high = ctx["range_high"]
+        range_low = ctx["range_low"]
+        range_mid = ctx["range_mid"]
+        rsi = ctx["rsi"]
+        vol_z = ctx["vol_z"]
 
         cur = candles[-1]
         close = cur["close"]
@@ -122,31 +210,12 @@ class RangeStrategy:
         low = cur["low"]
         signal_time = cur.get("timestamp", "")
 
-        rsi = _rsi(candles, RSI_PERIOD)
-        vol_z = _volume_zscore(candles, VOLUME_LOOKBACK)
-
-        # ── Single boolean entry masks (intrabar: any touch during 15m bar satisfies level) ──
-        low_threshold = range_low * (1 + ENTRY_THRESHOLD)
-        high_threshold = range_high * (1 - ENTRY_THRESHOLD)
-        near_low = low <= low_threshold  # bar touched or went below level at some point
-        near_high = high >= high_threshold  # bar touched or went above level at some point
-        rsi_oversold = rsi is not None and rsi < RSI_LONG
-        rsi_overbought = rsi is not None and rsi > RSI_SHORT
-        vol_quiet = vol_z is not None and vol_z < 1.0
-
-        long_signal = near_low and rsi_oversold and vol_quiet
-        short_signal = near_high and rsi_overbought and vol_quiet
+        long_signal, short_signal, entry_conds = self._check_entry_conditions(
+            high, low, close, range_high, range_low, range_mid, rsi, vol_z,
+        )
 
         rsi_str = f"{rsi:.2f}" if rsi is not None else "N/A"
         vol_z_str = f"{vol_z:.2f}" if vol_z is not None else "N/A"
-
-        entry_conds = [
-            {"label": "Touch range low (LONG)", "required": f"low ≤ {low_threshold:.2f}", "actual": f"{low:.2f}", "met": near_low},
-            {"label": "Touch range high (SHORT)", "required": f"high ≥ {high_threshold:.2f}", "actual": f"{high:.2f}", "met": near_high},
-            {"label": "RSI oversold (LONG)", "required": f"< {RSI_LONG}", "actual": rsi_str, "met": rsi_oversold},
-            {"label": "RSI overbought (SHORT)", "required": f"> {RSI_SHORT}", "actual": rsi_str, "met": rsi_overbought},
-            {"label": "Volume Z < 1.0 (no spike)", "required": "< 1.0", "actual": vol_z_str, "met": vol_quiet},
-        ]
 
         if long_signal:
             stop = range_low * (1 - STOP_BUFFER)
@@ -155,7 +224,7 @@ class RangeStrategy:
                 range_high, range_low, range_mid, rsi, vol_z, close,
                 [
                     f"Range [{range_low:.2f} – {range_high:.2f}]",
-                    f"Range bounce LONG: low {low:.2f} touched ≤ {low_threshold:.2f}, RSI {rsi_str}, vol_z {vol_z_str}",
+                    f"Range bounce LONG: low {low:.2f}, RSI {rsi_str}, vol_z {vol_z_str}",
                 ],
                 entry_conditions=entry_conds,
             )
@@ -175,7 +244,7 @@ class RangeStrategy:
                 range_high, range_low, range_mid, rsi, vol_z, close,
                 [
                     f"Range [{range_low:.2f} – {range_high:.2f}]",
-                    f"Range bounce SHORT: high {high:.2f} touched ≥ {high_threshold:.2f}, RSI {rsi_str}, vol_z {vol_z_str}",
+                    f"Range bounce SHORT: high {high:.2f}, RSI {rsi_str}, vol_z {vol_z_str}",
                 ],
                 entry_conditions=entry_conds,
             )
@@ -189,6 +258,13 @@ class RangeStrategy:
             )
 
         # ── No entry — explain why ──
+        near_low = entry_conds[0]["met"]
+        near_high = entry_conds[1]["met"]
+        rsi_oversold = entry_conds[2]["met"]
+        rsi_overbought = entry_conds[3]["met"]
+        vol_quiet = entry_conds[4]["met"]
+        low_threshold = range_low * (1 + ENTRY_THRESHOLD)
+        high_threshold = range_high * (1 - ENTRY_THRESHOLD)
         reasoning: list[str] = [f"Range [{range_low:.2f} – {range_high:.2f}]"]
         if not near_low and not near_high:
             reasoning.append(f"Bar did not touch low ≤ {low_threshold:.2f} or high ≥ {high_threshold:.2f} (low={low:.2f}, high={high:.2f})")
@@ -202,4 +278,68 @@ class RangeStrategy:
             range_high, range_low, range_mid, rsi, vol_z, close, reasoning,
             entry_conditions=entry_conds,
         )
+        return None
+
+    def evaluate_intrabar(self, candles: list[dict], live_bar: dict) -> Optional[Signal]:
+        """Evaluate using the *forming* bar's price action + last-closed-bar filters.
+
+        `candles` must be the closed-candle buffer (same as `evaluate`).
+        `live_bar` is the snapshot of the still-open 15m bar.
+
+        Returns Signal with the live bar's timestamp (bucket), or None.
+        """
+        required_keys = ("open", "high", "low", "close", "volume")
+        if not candles or not all(
+            isinstance(c, dict) and all(k in c for k in required_keys)
+            for c in candles
+        ):
+            return None
+
+        ctx = self._compute_range_and_filters(candles)
+        if ctx is None:
+            return None
+
+        range_high = ctx["range_high"]
+        range_low = ctx["range_low"]
+        range_mid = ctx["range_mid"]
+        rsi = ctx["rsi"]
+        vol_z = ctx["vol_z"]
+
+        high = live_bar["high"]
+        low = live_bar["low"]
+        close = live_bar["close"]
+        signal_time = live_bar.get("timestamp", "")
+
+        long_signal, short_signal, _ = self._check_entry_conditions(
+            high, low, close, range_high, range_low, range_mid, rsi, vol_z,
+        )
+
+        if long_signal:
+            stop = range_low * (1 - STOP_BUFFER)
+            tp = range_mid
+            if not self._passes_min_rr(Side.LONG, close, stop, tp):
+                return None
+            return Signal(
+                symbol=self._symbol,
+                side=Side.LONG,
+                signal_time=signal_time,
+                signal_candle_ts=signal_time,
+                stop_price=stop,
+                take_profit=tp,
+            )
+
+        if short_signal:
+            stop = range_high * (1 + STOP_BUFFER)
+            tp = range_mid
+            if not self._passes_min_rr(Side.SHORT, close, stop, tp):
+                return None
+            return Signal(
+                symbol=self._symbol,
+                side=Side.SHORT,
+                signal_time=signal_time,
+                signal_candle_ts=signal_time,
+                stop_price=stop,
+                take_profit=tp,
+            )
+
         return None

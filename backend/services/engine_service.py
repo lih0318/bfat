@@ -311,12 +311,43 @@ class EngineService:
         }
 
     def _sync_binance_position(self) -> None:
-        """On engine start, check Binance for an existing open position and restore into StateMachine."""
+        """On engine start, check Binance for an existing open position and restore into StateMachine.
+
+        Also restores TP algo order if found on exchange.
+        """
         if self._engine is None:
             return
         symbol = self._settings.bfat_symbol
         exec_client = self._engine._execution
         sm = self._engine._state_machine
+
+        # ── Hedge-mode guard ──
+        try:
+            pos_risk = exec_client._request("GET", "/fapi/v2/positionRisk", {})
+            if isinstance(pos_risk, list):
+                sides_for_sym = [
+                    p.get("positionSide")
+                    for p in pos_risk
+                    if isinstance(p, dict) and p.get("symbol") == symbol
+                ]
+                if "LONG" in sides_for_sym or "SHORT" in sides_for_sym:
+                    both_present = "LONG" in sides_for_sym and "SHORT" in sides_for_sym
+                    non_zero = sum(
+                        1 for p in pos_risk
+                        if isinstance(p, dict)
+                        and p.get("symbol") == symbol
+                        and float(p.get("positionAmt") or 0) != 0
+                    )
+                    if both_present and non_zero > 0:
+                        logger.error(
+                            "Hedge Mode detected for %s. BFAT requires One-Way mode. "
+                            "Position sync aborted.",
+                            symbol,
+                        )
+                        return
+        except Exception as e:
+            logger.debug("Hedge-mode check failed (non-fatal): %s", e)
+
         try:
             pos_data = exec_client.get_position(symbol)
             if not pos_data:
@@ -332,23 +363,28 @@ class EngineService:
             size = abs(pos_amt)
 
             stop_order_id: str | None = None
+            tp_order_id: str | None = None
             stop_price = entry_price
+            take_profit_price: float | None = None
             try:
                 for ao in exec_client.get_open_algo_orders(symbol):
                     st = ao.get("algoStatus") or ao.get("status")
                     if st != "NEW":
                         continue
-                    if (ao.get("orderType") or ao.get("type")) != "STOP_MARKET":
-                        continue
+                    ot = ao.get("orderType") or ao.get("type")
                     aid = ao.get("algoId")
-                    if aid is not None:
-                        stop_order_id = str(aid)
                     tr = ao.get("triggerPrice")
-                    if tr not in (None, ""):
-                        sp = float(tr)
-                        if sp > 0:
-                            stop_price = sp
-                    break
+                    px = float(tr) if tr not in (None, "") else 0.0
+                    if ot == "STOP_MARKET" and stop_order_id is None:
+                        if aid is not None:
+                            stop_order_id = str(aid)
+                        if px > 0:
+                            stop_price = px
+                    elif ot == "TAKE_PROFIT_MARKET" and tp_order_id is None:
+                        if aid is not None:
+                            tp_order_id = str(aid)
+                        if px > 0:
+                            take_profit_price = px
                 if stop_order_id is None:
                     open_orders = exec_client.get_open_orders(symbol)
                     for order in open_orders:
@@ -401,13 +437,16 @@ class EngineService:
                 stop_phase=StopPhase.INITIAL,
                 entry_time=entry_time,
                 correlation_id="restored_from_binance",
-                take_profit=None,
+                take_profit=take_profit_price,
             )
             sm.restore_position(position)
             self._engine._current_stop_order_id = stop_order_id
+            self._engine._current_tp_algo_id = tp_order_id
+            self._engine._current_take_profit = take_profit_price
             logger.info(
-                "Restored Binance position: %s %s %.6f @ %.2f, stop=%.2f (order=%s)",
+                "Restored Binance position: %s %s %.6f @ %.2f, stop=%.2f (order=%s), tp=%s (order=%s)",
                 side.value, symbol, size, entry_price, stop_price, stop_order_id,
+                take_profit_price, tp_order_id,
             )
         except Exception as e:
             logger.warning("Binance position sync failed: %s", e)

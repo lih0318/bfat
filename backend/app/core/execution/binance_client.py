@@ -169,12 +169,19 @@ class BinanceExecutionClient:
             return 0.0
         return qty
 
-    def format_price(self, symbol: str, price: float) -> float:
-        """Round price to PRICE_FILTER tick size."""
+    def format_price(self, symbol: str, price: float, *, ceil: bool = False) -> float:
+        """Round price to PRICE_FILTER tick size.
+
+        By default floors (safe for SL — trigger slightly closer to entry).
+        Pass ``ceil=True`` for TP triggers so the price is never rounded below
+        the target (avoids 1-tick adverse rounding).
+        """
         f = self._get_filters(symbol)
         step = f.get("price_step", 0)
         precision = f.get("price_precision", 2)
         if step > 0:
+            if ceil:
+                return round(math.ceil(price / step) * step, precision)
             return _floor_to_step(price, step, precision)
         return round(price, 2)
 
@@ -208,9 +215,15 @@ class BinanceExecutionClient:
         stop_price: float,
         client_order_id: str,
     ) -> dict:
-        """Place STOP_MARKET via Algo API (closePosition; required on USDT-M futures)."""
+        """Place STOP_MARKET via Algo API (closePosition; required on USDT-M futures).
+
+        For LONG SL the trigger is *below* entry → floor (default).
+        For SHORT SL the trigger is *above* entry → ceil so it triggers slightly
+        tighter, not looser.
+        """
         quantity = self.format_quantity(symbol, quantity)
-        trigger_px = self.format_price(symbol, stop_price)
+        sl_ceil = side == Side.SHORT
+        trigger_px = self.format_price(symbol, stop_price, ceil=sl_ceil)
         if quantity <= 0:
             raise ValueError(f"quantity after LOT_SIZE formatting is 0 (below minQty for {symbol})")
         if trigger_px <= 0:
@@ -239,9 +252,14 @@ class BinanceExecutionClient:
         take_profit_price: float,
         client_order_id: str,
     ) -> dict:
-        """Place TAKE_PROFIT_MARKET via Algo API (closePosition)."""
+        """Place TAKE_PROFIT_MARKET via Algo API (closePosition).
+
+        For LONG TP the trigger must be *above* entry → ceil rounding.
+        For SHORT TP the trigger must be *below* entry → floor rounding.
+        """
         quantity = self.format_quantity(symbol, quantity)
-        trigger_px = self.format_price(symbol, take_profit_price)
+        tp_ceil = side == Side.LONG
+        trigger_px = self.format_price(symbol, take_profit_price, ceil=tp_ceil)
         if quantity <= 0:
             raise ValueError(f"quantity after LOT_SIZE formatting is 0 (below minQty for {symbol})")
         if trigger_px <= 0:

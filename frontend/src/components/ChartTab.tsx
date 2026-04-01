@@ -2,10 +2,6 @@ import { useEffect, useRef } from 'react'
 
 const CHART_ID = 'bfat-tradingview-chart'
 
-/**
- * TradingView widget for BTCUSDT 15m. Dark theme, autosize.
- * No external backend logic.
- */
 export function ChartTab() {
   const mountedRef = useRef(false)
 
@@ -24,18 +20,23 @@ export function ChartTab() {
       if (!tv?.widget) return
       new tv.widget({
         width: '100%',
-        height: 400,
+        height: 480,
         symbol: 'BINANCE:BTCUSDT.P',
         interval: '15',
         timezone: 'Etc/UTC',
         theme: 'dark',
         style: '1',
         locale: 'en',
-        toolbar_bg: '#1a1f26',
+        toolbar_bg: '#10151e',
         enable_publishing: false,
         allow_symbol_change: false,
         hide_side_toolbar: false,
         container_id: CHART_ID,
+        overrides: {
+          'paneProperties.background': '#10151e',
+          'paneProperties.vertGridProperties.color': 'rgba(45,55,72,0.15)',
+          'paneProperties.horzGridProperties.color': 'rgba(45,55,72,0.15)',
+        },
       })
     }
     document.body.appendChild(script)
@@ -48,11 +49,14 @@ export function ChartTab() {
   }, [])
 
   return (
-    <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] overflow-hidden shadow-[var(--shadow)] ring-1 ring-white/5 backdrop-blur-sm">
-      <div className="border-b border-[var(--border)] px-4 py-2">
-        <h3 className="text-sm font-semibold text-[var(--text-muted)]">BTCUSDT 15m</h3>
+    <div className="card overflow-hidden">
+      <div className="border-b border-[var(--border-subtle)] px-5 py-3">
+        <div className="flex items-center gap-3">
+          <p className="section-title">BTCUSDT Perpetual</p>
+          <span className="badge bg-[var(--bg-elevated)] text-[var(--text-muted)]">15m</span>
+        </div>
       </div>
-      <div id={CHART_ID} className="min-h-[400px] w-full" />
+      <div id={CHART_ID} className="min-h-[480px] w-full" />
     </div>
   )
 }

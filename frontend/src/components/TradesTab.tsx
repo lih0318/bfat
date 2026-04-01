@@ -51,12 +51,12 @@ function SummaryCard({ label, value, suffix, color }: {
   label: string; value: string; suffix?: string; color?: 'positive' | 'negative' | 'neutral'
 }) {
   const cls =
-    color === 'positive' ? 'text-emerald-400'
-    : color === 'negative' ? 'text-rose-400'
+    color === 'positive' ? 'text-[var(--positive)]'
+    : color === 'negative' ? 'text-[var(--negative)]'
     : ''
   return (
-    <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] p-4">
-      <p className="text-[11px] uppercase tracking-wider text-[var(--text-muted)]">{label}</p>
+    <div className="card-elevated p-4">
+      <p className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">{label}</p>
       <p className={`mt-1 text-xl font-bold tabular-nums ${cls}`}>
         {value}{suffix && <span className="ml-0.5 text-sm font-medium text-[var(--text-muted)]">{suffix}</span>}
       </p>
@@ -86,20 +86,13 @@ export function TradesTab() {
   const fetchTrades = useCallback(async (p: number) => {
     try {
       const res = await apiFetch(`/api/trades?limit=${PAGE_SIZE}&offset=${p * PAGE_SIZE}`, { token: accessToken })
-      if (res.ok) {
-        const data: Trade[] = await res.json()
-        setTrades(data)
-        setHasMore(data.length === PAGE_SIZE)
-      }
+      if (res.ok) { const data: Trade[] = await res.json(); setTrades(data); setHasMore(data.length === PAGE_SIZE) }
     } catch { /* */ }
   }, [accessToken])
 
   useEffect(() => {
     setLoading(true)
-    Promise.all([fetchSummary(), fetchTrades(0)]).finally(() => {
-      setLoading(false)
-      initialLoaded.current = true
-    })
+    Promise.all([fetchSummary(), fetchTrades(0)]).finally(() => { setLoading(false); initialLoaded.current = true })
   }, [fetchSummary, fetchTrades])
 
   useEffect(() => {
@@ -108,13 +101,8 @@ export function TradesTab() {
 
   const sorted = [...trades].sort((a, b) => {
     let av: number, bv: number
-    if (sortKey === 'exit_time') {
-      av = new Date(a.exit_time || 0).getTime()
-      bv = new Date(b.exit_time || 0).getTime()
-    } else {
-      av = (a as Record<string, number>)[sortKey] ?? 0
-      bv = (b as Record<string, number>)[sortKey] ?? 0
-    }
+    if (sortKey === 'exit_time') { av = new Date(a.exit_time || 0).getTime(); bv = new Date(b.exit_time || 0).getTime() }
+    else { av = (a as unknown as Record<string, number>)[sortKey] ?? 0; bv = (b as unknown as Record<string, number>)[sortKey] ?? 0 }
     return sortAsc ? av - bv : bv - av
   })
 
@@ -133,8 +121,8 @@ export function TradesTab() {
 
   if (loading) {
     return (
-      <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-6 shadow-[var(--shadow)] ring-1 ring-white/5 backdrop-blur-sm">
-        <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-[var(--text-muted)]">Trade History</h3>
+      <div className="card p-6">
+        <p className="section-title mb-4">Trade History</p>
         <div className="flex items-center gap-3 text-[var(--text-muted)]">
           <div className="h-5 w-5 animate-spin-slow rounded-full border-2 border-[var(--border)] border-t-[var(--accent)]" />
           <span className="text-sm">Loading...</span>
@@ -144,7 +132,7 @@ export function TradesTab() {
   }
 
   const s = summary
-  const wrColor = (s?.win_rate ?? 0) >= 50 ? 'positive' : (s?.win_rate ?? 0) > 0 ? 'neutral' : 'neutral'
+  const wrColor = (s?.win_rate ?? 0) >= 50 ? 'positive' : 'neutral'
   const avgRColor = (s?.average_r ?? 0) > 0 ? 'positive' : (s?.average_r ?? 0) < 0 ? 'negative' : 'neutral'
   const expColor = (s?.expectancy_r ?? 0) > 0 ? 'positive' : (s?.expectancy_r ?? 0) < 0 ? 'negative' : 'neutral'
   const pnlColor = (s?.total_net_pnl ?? 0) > 0 ? 'positive' : (s?.total_net_pnl ?? 0) < 0 ? 'negative' : 'neutral'
@@ -152,7 +140,7 @@ export function TradesTab() {
   return (
     <div className="space-y-4">
 
-      {/* ── Summary Cards ────────────────── */}
+      {/* Summary Cards */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         <SummaryCard label="Total Trades" value={String(s?.total_trades ?? 0)} />
         <SummaryCard label="Win Rate" value={fmt(s?.win_rate)} suffix="%" color={wrColor as 'positive' | 'negative' | 'neutral'} />
@@ -162,12 +150,12 @@ export function TradesTab() {
         <SummaryCard label="Max DD" value={fmt(s?.max_drawdown_r, 2)} suffix="R" color="negative" />
       </div>
 
-      {/* ── Trades Table ─────────────────── */}
-      <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] shadow-[var(--shadow)] ring-1 ring-white/5 backdrop-blur-sm overflow-hidden">
+      {/* Trades Table */}
+      <div className="card overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-[var(--border)] text-left text-[11px] uppercase tracking-wider text-[var(--text-muted)]">
+              <tr className="border-b border-[var(--border)] text-left text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
                 <th className="px-4 py-3 font-semibold">Side</th>
                 <th className="px-4 py-3 font-semibold">Entry</th>
                 <th className="px-4 py-3 font-semibold">Exit</th>
@@ -196,8 +184,8 @@ export function TradesTab() {
                 const isLong = t.side?.toUpperCase() === 'LONG'
                 const rVal = t.r_multiple ?? 0
                 const pnlPct = t.pnl_percent ?? 0
-                const rColor = rVal > 0 ? 'text-emerald-400' : rVal < 0 ? 'text-rose-400' : ''
-                const pnlColor2 = pnlPct > 0 ? 'text-emerald-400' : pnlPct < 0 ? 'text-rose-400' : ''
+                const rColor = rVal > 0 ? 'text-[var(--positive)]' : rVal < 0 ? 'text-[var(--negative)]' : ''
+                const pnlColor2 = pnlPct > 0 ? 'text-[var(--positive)]' : pnlPct < 0 ? 'text-[var(--negative)]' : ''
                 const rowKey = t.id ?? idx
                 const isExpanded = expandedId === (t.id ?? idx)
                 const validOk = t.r_validation_status === 'OK'
@@ -205,15 +193,15 @@ export function TradesTab() {
                   <tr key={rowKey} className="group">
                     <td colSpan={9} className="p-0">
                       <div
-                        className={`cursor-pointer border-l-[3px] transition-colors hover:bg-[var(--bg-elevated)]/60 ${
-                          isLong ? 'border-l-emerald-500/60' : 'border-l-rose-500/60'
-                        } ${isExpanded ? 'bg-[var(--bg-elevated)]/40' : ''}`}
+                        className={`cursor-pointer border-l-[3px] transition-colors hover:bg-[var(--bg-elevated)]/50 ${
+                          isLong ? 'border-l-[var(--positive)]/50' : 'border-l-[var(--negative)]/50'
+                        } ${isExpanded ? 'bg-[var(--bg-elevated)]/30' : ''}`}
                         onClick={() => setExpandedId(isExpanded ? null : (t.id ?? idx))}
                       >
                         <div className="grid grid-cols-9 items-center">
                           <div className="px-4 py-3">
-                            <span className={`rounded-md px-2 py-0.5 text-[10px] font-bold uppercase ${
-                              isLong ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'
+                            <span className={`badge text-[10px] font-bold ${
+                              isLong ? 'bg-[var(--positive-muted)] text-[var(--positive)]' : 'bg-[var(--negative-muted)] text-[var(--negative)]'
                             }`}>{t.side}</span>
                           </div>
                           <div className="px-4 py-3 tabular-nums">{fmt(t.entry_price)}</div>
@@ -231,18 +219,17 @@ export function TradesTab() {
                           </div>
                           <div className="px-4 py-3">
                             {validOk ? (
-                              <span className="text-emerald-400/70 text-[10px] font-medium">OK</span>
+                              <span className="text-[var(--positive)]/70 text-[10px] font-medium">OK</span>
                             ) : (
-                              <span className="rounded-md bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-400 ring-1 ring-amber-500/30">
+                              <span className="badge bg-[var(--warning-muted)] text-[var(--warning)]">
                                 {t.r_validation_status || '–'}
                               </span>
                             )}
                           </div>
                         </div>
 
-                        {/* ── Expanded Detail ────── */}
                         {isExpanded && (
-                          <div className="border-t border-[var(--border)]/50 bg-[var(--bg-elevated)]/30 px-6 py-4">
+                          <div className="border-t border-[var(--border-subtle)] bg-[var(--bg-elevated)]/30 px-6 py-4 animate-fade-in">
                             <div className="grid gap-x-8 gap-y-2 sm:grid-cols-2 lg:grid-cols-4 text-xs">
                               <Detail label="Entry Time" value={t.entry_time || '–'} />
                               <Detail label="Exit Time" value={t.exit_time || '–'} />
@@ -270,22 +257,22 @@ export function TradesTab() {
           </table>
         </div>
 
-        {/* ── Pagination ─────────────────── */}
+        {/* Pagination */}
         {(page > 0 || hasMore) && (
-          <div className="flex items-center justify-between border-t border-[var(--border)] px-4 py-3 text-xs text-[var(--text-muted)]">
+          <div className="flex items-center justify-between border-t border-[var(--border-subtle)] px-4 py-3 text-xs text-[var(--text-muted)]">
             <span>Page {page + 1}</span>
             <div className="flex gap-2">
               <button
                 disabled={page === 0}
                 onClick={() => setPage(p => Math.max(0, p - 1))}
-                className="rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-1.5 transition-colors enabled:hover:bg-[var(--border)]/30 disabled:opacity-30"
+                className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-1.5 transition-colors enabled:hover:bg-[var(--border)]/20 disabled:opacity-30"
               >
                 Prev
               </button>
               <button
                 disabled={!hasMore}
                 onClick={() => setPage(p => p + 1)}
-                className="rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-1.5 transition-colors enabled:hover:bg-[var(--border)]/30 disabled:opacity-30"
+                className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-1.5 transition-colors enabled:hover:bg-[var(--border)]/20 disabled:opacity-30"
               >
                 Next
               </button>
@@ -298,7 +285,7 @@ export function TradesTab() {
 }
 
 function Detail({ label, value, color }: { label: string; value: string; color?: 'positive' | 'negative' }) {
-  const cls = color === 'positive' ? 'text-emerald-400' : color === 'negative' ? 'text-rose-400' : ''
+  const cls = color === 'positive' ? 'text-[var(--positive)]' : color === 'negative' ? 'text-[var(--negative)]' : ''
   return (
     <div className="flex items-baseline justify-between gap-2">
       <span className="text-[var(--text-muted)]">{label}</span>
