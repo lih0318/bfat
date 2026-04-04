@@ -198,6 +198,7 @@ class BFATEngine:
         self._current_take_profit: float | None = None
         self._last_signal_candle_ts: str = ""
         self._last_intrabar_entry_bucket_ts: str = ""
+        self._last_close_candle_ts: str = ""
         self._last_skip_reason: str | None = None
         self._pending_fallback_close: bool = False
 
@@ -347,6 +348,8 @@ class BFATEngine:
             return
         if bucket_ts and bucket_ts == self._last_signal_candle_ts:
             return
+        if bucket_ts and bucket_ts == self._last_close_candle_ts:
+            return
 
         signal = self._strategy_engine.evaluate_ranging_intrabar(
             candles, live_bar, self._state_machine.position,
@@ -426,7 +429,20 @@ class BFATEngine:
                     )
                     if not tp_resp or "orderId" not in tp_resp:
                         raise RuntimeError("TP placement failed")
-                    tp_algo_id = _validate_stop_response(tp_resp)
+                    candidate_id = _validate_stop_response(tp_resp)
+                    if self._execution.verify_algo_order_active(self._symbol, candidate_id):
+                        tp_algo_id = candidate_id
+                        logger.info("[TP_ORDER_VERIFIED] id=%s tp=%.4f", candidate_id, signal.take_profit)
+                    else:
+                        logger.warning(
+                            "[TP_VERIFICATION_FAILED] id=%s not active on exchange; fallback TP active",
+                            candidate_id,
+                        )
+                        self._system_log.insert(
+                            level="WARNING",
+                            event="tp_verification_failed",
+                            message=f"TP order {candidate_id} placed but not verified as NEW. Fallback TP active. tp={signal.take_profit}",
+                        )
                 except Exception as e:
                     logger.warning(
                         "[TP_REGISTRATION_FAILED] Proceeding without exchange TP; "
@@ -553,7 +569,7 @@ class BFATEngine:
             candles, self._state_machine.position
         )
 
-        # ── CloseSignal → market close (regime switch, strategy exit, etc.) ──
+        # ── CloseSignal → market close (regime switch close-first, strategy exit, etc.) ──
         if isinstance(result, CloseSignal):
             if self._state_machine.state == PositionState.OPEN:
                 try:
@@ -568,7 +584,12 @@ class BFATEngine:
                         event="market_close_failed",
                         message=f"Close signal failed: {e}. Will retry next candle.",
                     )
-            self._last_skip_reason = "close_signal"
+            is_close_first = "Close First" in result.reason
+            self._last_skip_reason = (
+                "close_first_wait_next_cycle" if is_close_first else "close_signal"
+            )
+            if is_close_first:
+                self._last_close_candle_ts = candles[-1].get("timestamp", "")
             return
 
         # ── FLAT → entry if Signal ──
@@ -578,8 +599,12 @@ class BFATEngine:
                 self._last_skip_reason = se_reason or "no_signal"
                 return
             signal = result
-            if signal.signal_candle_ts == self._last_signal_candle_ts:
+            candle_ts = signal.signal_candle_ts
+            if candle_ts == self._last_signal_candle_ts:
                 self._last_skip_reason = "duplicate_signal_candle"
+                return
+            if candle_ts and candle_ts == self._last_close_candle_ts:
+                self._last_skip_reason = "close_first_wait_next_cycle"
                 return
             atr_val = _atr(candles, ATR_PERIOD)
             entry_price_est = candles[-1]["close"]
@@ -671,14 +696,20 @@ class BFATEngine:
                         )
                         if not tp_resp or "orderId" not in tp_resp:
                             raise RuntimeError("TAKE_PROFIT_MARKET placement failed")
-                        tp_algo_id = _validate_stop_response(tp_resp)
-                        logger.info(
-                            "[TP_ORDER_PLACED]",
-                            extra={
-                                "orderId": tp_resp.get("orderId"),
-                                "takeProfit": signal.take_profit,
-                            },
-                        )
+                        candidate_id = _validate_stop_response(tp_resp)
+                        if self._execution.verify_algo_order_active(self._symbol, candidate_id):
+                            tp_algo_id = candidate_id
+                            logger.info("[TP_ORDER_VERIFIED] id=%s tp=%.4f", candidate_id, signal.take_profit)
+                        else:
+                            logger.warning(
+                                "[TP_VERIFICATION_FAILED] id=%s not active on exchange; fallback TP active",
+                                candidate_id,
+                            )
+                            self._system_log.insert(
+                                level="WARNING",
+                                event="tp_verification_failed",
+                                message=f"TP order {candidate_id} placed but not verified as NEW. Fallback TP active. tp={signal.take_profit}",
+                            )
                     except Exception as e:
                         logger.warning(
                             "[TP_REGISTRATION_FAILED] Proceeding without exchange TP; "

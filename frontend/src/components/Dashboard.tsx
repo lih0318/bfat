@@ -14,10 +14,14 @@ interface StatusData {
   last_signal: Record<string, string> | null
   current_stop_price: number | null
   take_profit: number | null
+  tp_protection_mode: 'exchange' | 'fallback' | 'none'
+  tp_verified: boolean | null
   r_multiple: number | null
   r_validation_status: string | null
   system_health: string
   equity: number
+  unrealized_pnl: number | null
+  total_realized_pnl: number | null
   kill_switch_triggered: boolean
   error: string | null
 }
@@ -270,7 +274,7 @@ export function Dashboard() {
             />
 
             <div className="grid gap-5 lg:grid-cols-3">
-              {/* Equity Card */}
+              {/* Equity & PnL Card */}
               <div className="card p-5">
                 <p className="section-title mb-3">Equity</p>
                 <p className="text-2xl font-bold tabular-nums">
@@ -280,6 +284,32 @@ export function Dashboard() {
                 {displayEquity === null && (
                   <p className="mt-2 text-xs text-[var(--text-muted)]">잔고를 불러오지 못했습니다.</p>
                 )}
+
+                {/* Unrealized PnL */}
+                <div className="mt-4 border-t border-[var(--border-subtle)] pt-3">
+                  <p className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">미실현 손익</p>
+                  {status?.unrealized_pnl != null ? (
+                    <p className={`mt-0.5 text-lg font-bold tabular-nums ${status.unrealized_pnl >= 0 ? 'text-[var(--positive)]' : 'text-[var(--negative)]'}`}>
+                      {status.unrealized_pnl >= 0 ? '+' : ''}{status.unrealized_pnl.toFixed(4)}
+                      <span className="ml-1 text-xs font-normal text-[var(--text-muted)]">USDT</span>
+                    </p>
+                  ) : (
+                    <p className="mt-0.5 text-sm text-[var(--text-muted)]">–</p>
+                  )}
+                </div>
+
+                {/* Total Realized PnL */}
+                <div className="mt-3 border-t border-[var(--border-subtle)] pt-3">
+                  <p className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">총 실현손익</p>
+                  {status?.total_realized_pnl != null ? (
+                    <p className={`mt-0.5 text-lg font-bold tabular-nums ${status.total_realized_pnl >= 0 ? 'text-[var(--positive)]' : 'text-[var(--negative)]'}`}>
+                      {status.total_realized_pnl >= 0 ? '+' : ''}{status.total_realized_pnl.toFixed(4)}
+                      <span className="ml-1 text-xs font-normal text-[var(--text-muted)]">USDT</span>
+                    </p>
+                  ) : (
+                    <p className="mt-0.5 text-sm text-[var(--text-muted)]">–</p>
+                  )}
+                </div>
               </div>
 
               {/* Position Card */}
@@ -288,6 +318,7 @@ export function Dashboard() {
                   position={pos ?? null}
                   currentStopPrice={status?.current_stop_price ?? null}
                   takeProfit={status?.take_profit ?? null}
+                  tpProtectionMode={status?.tp_protection_mode ?? 'none'}
                   rMultiple={rMultiple}
                 />
               </div>

@@ -287,10 +287,19 @@ export function InsightTab() {
 
       {/* Skip Reason */}
       {data?.skip_reason && (
-        <div className="flex items-center gap-2.5 rounded-xl border border-[var(--warning)]/20 bg-[var(--warning-muted)] px-5 py-3.5">
-          <span className="text-[var(--warning)]">⏸</span>
-          <span className="text-sm text-[var(--warning)]">
-            Signal skipped: <span className="font-normal text-[var(--text-secondary)]">{data.skip_reason}</span>
+        <div className={`flex items-center gap-2.5 rounded-xl border px-5 py-3.5 ${
+          data.skip_reason === 'close_first_wait_next_cycle'
+            ? 'border-[var(--accent)]/20 bg-[var(--accent-muted)]'
+            : 'border-[var(--warning)]/20 bg-[var(--warning-muted)]'
+        }`}>
+          <span className={data.skip_reason === 'close_first_wait_next_cycle' ? 'text-[var(--accent)]' : 'text-[var(--warning)]'}>
+            {data.skip_reason === 'close_first_wait_next_cycle' ? '⏭' : '⏸'}
+          </span>
+          <span className={`text-sm ${data.skip_reason === 'close_first_wait_next_cycle' ? 'text-[var(--accent)]' : 'text-[var(--warning)]'}`}>
+            {data.skip_reason === 'close_first_wait_next_cycle'
+              ? <>Regime changed — position closed first. <span className="font-normal text-[var(--text-secondary)]">Re-entry evaluated next candle.</span></>
+              : <>Signal skipped: <span className="font-normal text-[var(--text-secondary)]">{data.skip_reason}</span></>
+            }
           </span>
         </div>
       )}

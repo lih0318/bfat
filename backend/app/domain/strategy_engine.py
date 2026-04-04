@@ -4,8 +4,8 @@ Delegates to BreakoutStrategy (TRENDING) or RangeStrategy (RANGING)
 based on RegimeClassifier output.
 
 Features:
-  * Regime-switch PnL gate: losing → close, winning → hold + cooldown
-  * Strong-momentum conditional immediate entry after regime switch
+  * Close-first policy: regime switch always closes existing position first
+  * Strong-momentum conditional immediate entry after regime switch (FLAT only)
   * Score-based position sizing (0.7x / 1.0x / 1.2x)
   * Configurable cooldown per regime (TRENDING 1 bar / RANGING 0 bars)
   * `evaluate_ranging_intrabar` for live-bar range entry without waiting for close
@@ -62,8 +62,7 @@ class StrategyEngine:
     """Single entry point for strategy evaluation with regime switching.
 
     * Only ONE strategy is active at a time.
-    * Regime change with losing position → CloseSignal.
-    * Regime change with winning position → hold + cooldown.
+    * Close-first: regime change always closes existing position (regardless of PnL).
     * With an open position: optional CloseSignal from ADX/BB/structure exit rules (no new entries).
     * Strong-momentum required only when switching TO TRENDING; RANGING allows immediate eval.
     * Score-based position sizing applied to every entry signal.
@@ -114,16 +113,9 @@ class StrategyEngine:
             self._active_regime = regime
 
             if current_position is not None:
-                unrealized = self._unrealized_pnl(current_position, candles)
-                if unrealized < 0:
-                    return CloseSignal(reason="Regime Switch - Losing Position")
-                self._regime_switch_cooldown = (
-                    _COOLDOWN_BARS_RANGING if regime == "RANGING" else _COOLDOWN_BARS_TRENDING
-                )
-                self._last_skip_reason = "regime_switch_winning_hold"
-                return None
+                return CloseSignal(reason="Regime Switch - Close First")
 
-            # ── No position ──
+            # ── No position → apply entry cooldown ──
             if regime == "TRENDING":
                 if not self._check_strong_momentum(candles):
                     self._regime_switch_cooldown = _COOLDOWN_BARS_TRENDING
@@ -134,17 +126,10 @@ class StrategyEngine:
                 if _COOLDOWN_BARS_RANGING > 0:
                     self._last_skip_reason = "regime_switch_ranging_cooldown"
                     return None
-                # cooldown == 0 → fall through to immediate evaluation
         else:
             self._active_regime = regime
 
-        # ── 2. Cooldown gate ──────────────────────────────────────
-        if self._regime_switch_cooldown > 0:
-            self._regime_switch_cooldown -= 1
-            self._last_skip_reason = f"cooldown ({self._regime_switch_cooldown + 1} bars remaining)"
-            return None
-
-        # ── 2b. Open position: strategy-driven exit only (no new entries) ──
+        # ── 2. Open position: strategy-driven exit (no new entries) ─
         if current_position is not None:
             exit_sig = self._evaluate_strategy_exit(candles, current_position)
             if exit_sig is not None:
@@ -152,13 +137,19 @@ class StrategyEngine:
             self._last_skip_reason = "hold_open_position"
             return None
 
-        # ── 3. Active strategy evaluation ─────────────────────────
+        # ── 3. Entry cooldown gate (FLAT only) ────────────────────
+        if self._regime_switch_cooldown > 0:
+            self._regime_switch_cooldown -= 1
+            self._last_skip_reason = f"cooldown ({self._regime_switch_cooldown + 1} bars remaining)"
+            return None
+
+        # ── 4. Active strategy evaluation ─────────────────────────
         signal = self._evaluate_active_strategy(candles)
 
         if signal is None:
             self._last_skip_reason = "no_signal_from_strategy"
 
-        # ── 4. Apply position scale ───────────────────────────────
+        # ── 5. Apply position scale ───────────────────────────────
         if signal is not None:
             signal = Signal(
                 symbol=signal.symbol,

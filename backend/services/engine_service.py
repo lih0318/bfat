@@ -234,16 +234,23 @@ class EngineService:
             live_stop = live_pos.get("stop_price", 0) if live_pos else 0
             live_tp = live_pos.get("take_profit") if live_pos else None
             live_tp_f = float(live_tp) if live_tp not in (None, "") else None
+            stopped_unrealized = None
+            if live_pos is not None:
+                stopped_unrealized = live_pos.get("unrealized_pnl")
             return {
                 "engine_state": "stopped",
                 "position": live_pos,
                 "last_signal": None,
                 "current_stop_price": live_stop if live_stop > 0 else None,
                 "take_profit": live_tp_f if live_tp_f and live_tp_f > 0 else None,
+                "tp_protection_mode": "none",
+                "tp_verified": None,
                 "r_multiple": None,
                 "r_validation_status": None,
                 "system_health": "HEALTHY",
                 "equity": equity,
+                "unrealized_pnl": stopped_unrealized,
+                "total_realized_pnl": None,
                 "kill_switch_triggered": False,
                 "error": self._critical_error,
             }
@@ -292,6 +299,30 @@ class EngineService:
             if pos is not None
             else getattr(self._engine, "_current_take_profit", None)
         )
+        tp_algo_id = getattr(self._engine, "_current_tp_algo_id", None)
+        if take_profit is not None and float(take_profit) > 0:
+            tp_protection_mode = "exchange" if tp_algo_id else "fallback"
+        else:
+            tp_protection_mode = "none"
+        tp_verified = tp_algo_id is not None if tp_protection_mode == "exchange" else None
+        unrealized_pnl: float | None = None
+        if pos is not None:
+            try:
+                exec_client = self._engine._execution
+                live_data = exec_client.get_position(self._settings.bfat_symbol)
+                if live_data:
+                    up = live_data.get("unRealizedProfit") or live_data.get("unrealizedProfit") or 0
+                    unrealized_pnl = float(up) if up else 0.0
+            except Exception:
+                pass
+        elif pos_dict is not None:
+            unrealized_pnl = pos_dict.get("unrealized_pnl")
+        total_realized_pnl: float | None = None
+        try:
+            summary = self.get_trade_summary(symbol=self._settings.bfat_symbol)
+            total_realized_pnl = summary.get("total_net_pnl", 0.0)
+        except Exception:
+            pass
         return {
             "engine_state": sm.state.value,
             "position": pos_dict,
@@ -302,10 +333,14 @@ class EngineService:
                 else None
             ),
             "take_profit": take_profit,
+            "tp_protection_mode": tp_protection_mode,
+            "tp_verified": tp_verified,
             "r_multiple": r_multiple,
             "r_validation_status": r_validation_status,
             "system_health": system_health,
             "equity": equity,
+            "unrealized_pnl": unrealized_pnl,
+            "total_realized_pnl": total_realized_pnl,
             "kill_switch_triggered": kill.is_triggered(),
             "error": self._critical_error,
         }

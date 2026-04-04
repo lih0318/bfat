@@ -15,6 +15,7 @@ interface PositionCardProps {
   position: PositionData | null
   currentStopPrice: number | null
   takeProfit: number | null
+  tpProtectionMode?: 'exchange' | 'fallback' | 'none'
   rMultiple: number | null
 }
 
@@ -23,7 +24,7 @@ function fmt(v: number | null | undefined, digits = 2): string {
   return v.toFixed(digits)
 }
 
-export function PositionCard({ position, currentStopPrice, takeProfit, rMultiple }: PositionCardProps) {
+export function PositionCard({ position, currentStopPrice, takeProfit, tpProtectionMode = 'none', rMultiple }: PositionCardProps) {
   if (!position) {
     return (
       <div className="card p-5">
@@ -106,9 +107,26 @@ export function PositionCard({ position, currentStopPrice, takeProfit, rMultiple
 
         {/* Take Profit */}
         <div className="rounded-xl border border-[var(--positive)]/15 bg-[var(--positive-muted)] p-3">
-          <div className="flex items-center gap-2">
-            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[var(--positive)]/20 text-[10px] font-bold text-[var(--positive)]">TP</span>
-            <p className="text-[10px] uppercase tracking-wider text-[var(--positive)]/70">Take Profit</p>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[var(--positive)]/20 text-[10px] font-bold text-[var(--positive)]">TP</span>
+              <p className="text-[10px] uppercase tracking-wider text-[var(--positive)]/70">Take Profit</p>
+            </div>
+            {tpProtectionMode === 'exchange' && (
+              <span className="rounded-md bg-[var(--positive)]/15 px-1.5 py-0.5 text-[10px] font-medium text-[var(--positive)]">
+                Exchange ✓
+              </span>
+            )}
+            {tpProtectionMode === 'fallback' && (
+              <span className="rounded-md bg-[var(--warning-muted)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--warning)]">
+                Fallback
+              </span>
+            )}
+            {tpProtectionMode === 'none' && tp == null && (
+              <span className="rounded-md bg-[var(--bg-elevated)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-muted)]">
+                미설정
+              </span>
+            )}
           </div>
           {isTrailingTP ? (
             <p className="mt-1.5 text-sm font-medium text-[var(--positive)]/70">트레일링 스탑으로 관리</p>

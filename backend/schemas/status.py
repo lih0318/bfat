@@ -34,6 +34,9 @@ class StatusResponse(BaseModel):
     position: Optional[PositionResponse] = None
     last_signal: Optional[LastSignalResponse] = None
     current_stop_price: Optional[float] = None
+    take_profit: Optional[float] = None
+    tp_protection_mode: str = "none"
+    tp_verified: Optional[bool] = None
     equity: float
     kill_switch_triggered: bool
     error: Optional[str] = None
