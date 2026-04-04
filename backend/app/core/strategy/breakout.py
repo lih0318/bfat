@@ -181,6 +181,91 @@ class BreakoutStrategy:
         if entry_conditions is not None:
             self._last_evaluation["entry_conditions"] = entry_conditions
 
+    def update_insight_live(self, candles: list[dict], live_bar: dict) -> None:
+        """Refresh ``_last_evaluation`` using the forming bar without producing signals."""
+        required_keys = ("open", "high", "low", "close", "volume")
+        if not candles or not all(
+            isinstance(c, dict) and all(k in c for k in required_keys)
+            for c in candles
+        ):
+            return
+        minimum_required = max(
+            self.LOOKBACK,
+            self.BB_PERIOD,
+            self.BB_WIDTH_ZSCORE_PERIOD,
+            self.ATR_PERIOD + 1,
+            self.BREAKOUT_LOOKBACK + 1,
+            self.VOLUME_LOOKBACK + 1,
+        )
+        if len(candles) < minimum_required:
+            return
+
+        close = live_bar["close"]
+
+        closes = [c["close"] for c in candles]
+        middle, upper, lower = _bollinger_bands(closes, self.BB_PERIOD, self.BB_NUM_STD)
+        band_widths = [
+            (u - l) / m if m and m > 0 else 0.0
+            for u, l, m in zip(upper, lower, middle)
+        ]
+        if len(band_widths) < self.LOOKBACK:
+            return
+        width_zscores = _compute_bb_width_zscore(band_widths, self.BB_WIDTH_ZSCORE_PERIOD)
+        current_z = width_zscores[-1]
+        bb_width_pct = _bb_width_percentile(band_widths, self.LOOKBACK)
+
+        atr_vals = _atr(candles, self.ATR_PERIOD)
+        current_atr = atr_vals[-1] if len(atr_vals) == len(candles) else 0.0
+        current_vol = candles[-1]["volume"]
+        avg_vol = _average_volume(candles, self.VOLUME_LOOKBACK)
+        volume_ratio = current_vol / avg_vol if avg_vol and avg_vol > 0 else 0.0
+        vol_z = _volume_zscore(candles, self.VOLUME_LOOKBACK)
+        vol_z_str = f"{vol_z:.2f}" if vol_z is not None else "N/A"
+
+        prev_bars = candles[-(self.BREAKOUT_LOOKBACK + 1) : -1]
+        high_20 = max(c["high"] for c in prev_bars)
+        low_20 = min(c["low"] for c in prev_bars)
+        breakout_long = close > high_20 * (1 + self.BREAKOUT_THRESHOLD)
+        breakout_short = close < low_20 * (1 - self.BREAKOUT_THRESHOLD)
+
+        compression = current_z < -0.8 and bb_width_pct is not None and bb_width_pct < 60
+        movement = _last_n_candles_movement(candles, self.OVEREXTENSION_LOOKBACK)
+        overext_threshold = self.ATR_OVEREXTENSION * current_atr * self.OVEREXTENSION_LOOKBACK
+        overextended = movement >= overext_threshold
+
+        vol_z_safe = vol_z if vol_z is not None else float("-inf")
+        reasoning: list[str] = [f"BB width Z-score {current_z:.2f}"]
+        if compression:
+            reasoning[0] += " → compression"
+        else:
+            reasoning[0] += " → no compression"
+        reasoning.append(f"Live: close {close:.2f}, vol Z {vol_z_str}")
+        if breakout_long:
+            reasoning.append(f"Breakout above 20-bar high {high_20:.2f}")
+        elif breakout_short:
+            reasoning.append(f"Breakout below 20-bar low {low_20:.2f}")
+
+        entry_conds = [
+            {"label": "BB width Z (compression)", "required": "< -0.8", "actual": f"{current_z:.2f}", "met": current_z < -0.8},
+            {"label": "BB width %ile (compression)", "required": "< 60%", "actual": f"{bb_width_pct:.1f}%" if bb_width_pct is not None else "–", "met": bb_width_pct is not None and bb_width_pct < 60},
+            {"label": "ATR > 0", "required": "> 0", "actual": f"{current_atr:.4f}", "met": current_atr > 0},
+            {"label": "Not overextended", "required": f"movement < {overext_threshold:.1f}", "actual": f"{movement:.2f}", "met": not overextended},
+            {"label": "Breakout LONG", "required": "close > 20-bar high", "actual": "yes" if breakout_long else "no", "met": breakout_long},
+            {"label": "Breakout SHORT", "required": "close < 20-bar low", "actual": "yes" if breakout_short else "no", "met": breakout_short},
+            {"label": "Volume Z (LONG)", "required": f"≥ {self.VOLUME_ZSCORE_LONG_THRESHOLD}", "actual": vol_z_str, "met": vol_z is not None and vol_z_safe >= self.VOLUME_ZSCORE_LONG_THRESHOLD},
+            {"label": "Volume Z (SHORT)", "required": f"≥ {self.VOLUME_ZSCORE_SHORT_THRESHOLD}", "actual": vol_z_str, "met": vol_z is not None and vol_z_safe >= self.VOLUME_ZSCORE_SHORT_THRESHOLD},
+        ]
+
+        regime = "Trending" if breakout_long or breakout_short else "Ranging"
+        if overextended:
+            regime = "High Volatility"
+
+        self._store_evaluation(
+            bb_width_pct, current_atr, volume_ratio, regime, reasoning,
+            close, bb_width_z=current_z, compression_model="Z_SCORE_HYBRID",
+            entry_conditions=entry_conds,
+        )
+
     def evaluate(self, candles: list[dict]) -> Optional[Signal]:
         """
         Evaluate closed candles. Returns Signal(LONG/SHORT) or None.

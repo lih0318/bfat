@@ -59,11 +59,29 @@ interface InsightData {
   trend_reference?: TrendRef
   range_reference?: RangeRef
   regime_classifier?: RegimeClassifier
+  last_insight_update_ts?: number
 }
 
 function fmt(v: number | null | undefined, digits = 2, suffix = ''): string {
   if (v == null) return '–'
   return v.toFixed(digits) + suffix
+}
+
+function useRelativeTime(epochSec: number | undefined): string {
+  const [label, setLabel] = useState('')
+  useEffect(() => {
+    if (!epochSec) { setLabel(''); return }
+    function update() {
+      const delta = Math.max(0, Math.floor(Date.now() / 1000 - epochSec))
+      if (delta < 5) setLabel('just now')
+      else if (delta < 60) setLabel(`${delta}s ago`)
+      else setLabel(`${Math.floor(delta / 60)}m ago`)
+    }
+    update()
+    const id = setInterval(update, 5000)
+    return () => clearInterval(id)
+  }, [epochSec])
+  return label
 }
 
 function MetricCard({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
@@ -104,9 +122,11 @@ export function InsightTab() {
       }
     }
     fetch_()
-    const interval = setInterval(fetch_, 30000)
+    const interval = setInterval(fetch_, 15000)
     return () => { cancelled = true; clearInterval(interval) }
   }, [accessToken])
+
+  const updatedAgo = useRelativeTime(data?.last_insight_update_ts)
 
   if (loading) {
     return (
@@ -140,7 +160,15 @@ export function InsightTab() {
       {/* Header */}
       <div className="card p-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="section-title">Market Insight</p>
+          <div className="flex items-center gap-3">
+            <p className="section-title">Market Insight</p>
+            {updatedAgo && (
+              <span className="flex items-center gap-1.5 text-[11px] text-[var(--text-muted)]">
+                <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--positive)] animate-pulse" />
+                {updatedAgo}
+              </span>
+            )}
+          </div>
           <div className="flex flex-wrap items-center gap-2">
             <span className={`badge ${regimeClass}`}>
               {regime}

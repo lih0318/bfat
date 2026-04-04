@@ -9,6 +9,7 @@ Handles two data paths:
 import asyncio
 import json
 import logging
+import time
 from collections import deque
 from typing import Any, Callable
 
@@ -24,6 +25,7 @@ BINANCE_REST_MAINNET = "https://fapi.binance.com"
 BINANCE_REST_TESTNET = "https://testnet.binancefuture.com"
 BINANCE_WS_TESTNET = "wss://stream.binancefuture.com/ws"
 MAX_CANDLE_BUFFER = 500
+_LIVE_INSIGHT_INTERVAL_S = 15  # throttle live insight updates
 
 
 def _parse_closed_candle(msg: dict) -> dict | None:
@@ -94,6 +96,7 @@ class BinanceMarketStream:
         self._running = False
         self._ws: Any = None
         self._run_task: asyncio.Task | None = None
+        self._last_live_insight_ts: float = 0.0
 
     @property
     def candles(self) -> list[dict]:
@@ -197,6 +200,16 @@ class BinanceMarketStream:
                                     raise
                                 except Exception:
                                     logger.debug("on_market_update error", exc_info=True)
+
+                                now = time.monotonic()
+                                if now - self._last_live_insight_ts >= _LIVE_INSIGHT_INTERVAL_S:
+                                    try:
+                                        self._engine.evaluate_for_insight_live(
+                                            candles_list, live_bar,
+                                        )
+                                        self._last_live_insight_ts = now
+                                    except Exception:
+                                        logger.debug("live insight update error", exc_info=True)
 
                         except json.JSONDecodeError:
                             continue

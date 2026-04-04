@@ -397,6 +397,23 @@ class EngineService:
             except Exception as e:
                 logger.warning("Failed to fetch open orders during sync: %s", e)
 
+            if stop_order_id is not None and stop_price > 0:
+                valid_stop = (
+                    (side == Side.LONG and stop_price < entry_price)
+                    or (side == Side.SHORT and stop_price > entry_price)
+                )
+                if not valid_stop:
+                    logger.warning(
+                        "Restored stop %.4f is on wrong side of entry %.4f for %s %s; "
+                        "cancelling and re-registering",
+                        stop_price, entry_price, side.value, symbol,
+                    )
+                    try:
+                        exec_client.cancel_order(symbol, stop_order_id)
+                    except Exception:
+                        pass
+                    stop_order_id = None
+
             if stop_order_id is None:
                 safety_pct = 0.015
                 if side == Side.LONG:
@@ -443,6 +460,28 @@ class EngineService:
             self._engine._current_stop_order_id = stop_order_id
             self._engine._current_tp_algo_id = tp_order_id
             self._engine._current_take_profit = take_profit_price
+
+            if stop_order_id:
+                try:
+                    if not exec_client.verify_algo_order_active(symbol, stop_order_id):
+                        logger.warning(
+                            "Stop order %s not confirmed as active on exchange for %s",
+                            stop_order_id, symbol,
+                        )
+                except Exception as e:
+                    logger.debug("Stop verification check failed: %s", e)
+
+            if tp_order_id:
+                try:
+                    if not exec_client.verify_algo_order_active(symbol, tp_order_id):
+                        logger.warning(
+                            "TP order %s not confirmed as active on exchange for %s",
+                            tp_order_id, symbol,
+                        )
+                        self._engine._current_tp_algo_id = None
+                except Exception as e:
+                    logger.debug("TP verification check failed: %s", e)
+
             logger.info(
                 "Restored Binance position: %s %s %.6f @ %.2f, stop=%.2f (order=%s), tp=%s (order=%s)",
                 side.value, symbol, size, entry_price, stop_price, stop_order_id,
@@ -747,4 +786,5 @@ class EngineService:
         if skip_reason is None and self._engine is not None:
             skip_reason = getattr(self._engine, "_last_skip_reason", None)
         result["skip_reason"] = skip_reason
+        result["last_insight_update_ts"] = details.get("last_insight_update_ts", 0)
         return result

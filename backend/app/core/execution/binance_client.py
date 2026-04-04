@@ -330,6 +330,18 @@ class BinanceExecutionClient:
         )
         return data if isinstance(data, list) else []
 
+    def verify_algo_order_active(self, symbol: str, algo_order_id: str) -> bool:
+        """Check if an algo order is live (NEW) on the exchange."""
+        try:
+            for o in self.get_open_algo_orders(symbol):
+                aid = o.get("algoId")
+                if aid is not None and str(aid) == str(algo_order_id):
+                    status = o.get("algoStatus") or o.get("status")
+                    return status == "NEW"
+        except Exception:
+            pass
+        return False
+
     def get_user_trades(self, symbol: str, limit: int = 20) -> list[dict]:
         """GET /fapi/v1/userTrades. Returns list of trade dicts (most recent first)."""
         data = self._request("GET", "/fapi/v1/userTrades", {"symbol": symbol, "limit": limit})

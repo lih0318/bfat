@@ -130,6 +130,37 @@ def _atr(candles: list[dict], period: int = 14) -> float:
     return sum(tr_list[-period:]) / period
 
 
+FALLBACK_STOP_PCT = 0.015
+
+
+def _validate_stop_price(
+    side: Side, stop_price: float, actual_entry_price: float, atr_val: float,
+) -> float:
+    """Ensure stop_price is on the correct side of actual_entry_price.
+
+    Recalculates from actual_entry_price if the strategy-provided stop
+    became invalid due to slippage.
+    """
+    valid = (
+        stop_price < actual_entry_price
+        if side == Side.LONG
+        else stop_price > actual_entry_price
+    )
+    if valid:
+        return stop_price
+    logger.warning(
+        "[SL_REPRICE] side=%s entry=%.4f invalid_stop=%.4f → recalculating",
+        side.value, actual_entry_price, stop_price,
+    )
+    if atr_val > 0:
+        if side == Side.LONG:
+            return actual_entry_price - INITIAL_STOP_ATR * atr_val
+        return actual_entry_price + INITIAL_STOP_ATR * atr_val
+    if side == Side.LONG:
+        return actual_entry_price * (1 - FALLBACK_STOP_PCT)
+    return actual_entry_price * (1 + FALLBACK_STOP_PCT)
+
+
 def _ts() -> str:
     """ISO timestamp."""
     return datetime.utcnow().isoformat(timespec="seconds") + "Z"
@@ -187,9 +218,108 @@ class BFATEngine:
             if self._current_tp_algo_id is not None:
                 raise RuntimeError("Invariant: FLAT must have _current_tp_algo_id None")
 
+    def _place_stop_with_retry(
+        self,
+        side: Side,
+        actual_size: float,
+        stop_price: float,
+        actual_entry_price: float,
+        atr_val: float,
+    ) -> tuple[str, float]:
+        """Place SL with one retry using a fallback price. Returns (orderId, final_stop_price).
+
+        Attempt 1: the validated stop_price.
+        Attempt 2: a percentage-based fallback derived from actual_entry_price.
+        Raises RuntimeError only if both attempts fail.
+        """
+        stop_id = _generate_client_order_id("bfat_stop")
+        try:
+            stop_resp = self._execution.place_stop_market_order(
+                self._symbol, side, actual_size, stop_price, stop_id,
+            )
+            if stop_resp and "orderId" in stop_resp:
+                order_id = _validate_stop_response(stop_resp)
+                logger.info(
+                    "[STOP_ORDER_PLACED]",
+                    extra={"orderId": order_id, "stopPrice": stop_price},
+                )
+                return order_id, stop_price
+        except Exception as e:
+            logger.warning("[STOP_ATTEMPT_1_FAILED] price=%.4f err=%s", stop_price, e)
+
+        if side == Side.LONG:
+            fallback_stop = actual_entry_price * (1 - FALLBACK_STOP_PCT)
+        else:
+            fallback_stop = actual_entry_price * (1 + FALLBACK_STOP_PCT)
+        fallback_stop = self._execution.format_price(
+            self._symbol, fallback_stop, ceil=(side == Side.SHORT),
+        )
+
+        if abs(fallback_stop - stop_price) < 1e-8:
+            raise RuntimeError(
+                f"SL placement failed and fallback price identical ({stop_price})"
+            )
+
+        retry_id = _generate_client_order_id("bfat_stop_retry")
+        try:
+            stop_resp = self._execution.place_stop_market_order(
+                self._symbol, side, actual_size, fallback_stop, retry_id,
+            )
+            if stop_resp and "orderId" in stop_resp:
+                order_id = _validate_stop_response(stop_resp)
+                logger.info(
+                    "[STOP_ORDER_PLACED_RETRY]",
+                    extra={
+                        "orderId": order_id,
+                        "stopPrice": fallback_stop,
+                        "originalStop": stop_price,
+                    },
+                )
+                return order_id, fallback_stop
+        except Exception as e:
+            logger.warning("[STOP_ATTEMPT_2_FAILED] price=%.4f err=%s", fallback_stop, e)
+
+        raise RuntimeError(
+            f"SL placement failed after 2 attempts "
+            f"(original={stop_price}, fallback={fallback_stop})"
+        )
+
+    def _check_realtime_tp(self, live_bar: dict, equity: float) -> None:
+        """Check TP in real-time for OPEN positions without exchange TP algo."""
+        pos = self._state_machine.position
+        if pos is None:
+            return
+        tp = pos.take_profit
+        if tp is None or self._current_tp_algo_id:
+            return
+        live_price = live_bar.get("close", 0)
+        if live_price <= 0:
+            return
+        hit = (
+            (pos.side == Side.LONG and live_price >= tp)
+            or (pos.side == Side.SHORT and live_price <= tp)
+        )
+        if hit:
+            try:
+                self._market_close_open_position(
+                    equity,
+                    event="take_profit_hit",
+                    message=f"Take profit (realtime) price={live_price:.4f} target={tp:.4f}",
+                )
+            except Exception as e:
+                self._system_log.insert(
+                    level="ERROR",
+                    event="realtime_tp_close_failed",
+                    message=str(e),
+                )
+
     def evaluate_for_insight(self, candles: list[dict]) -> None:
         """Run strategy evaluation to populate Insight only. No orders, no position changes."""
         self._strategy_engine.evaluate_for_insight(candles)
+
+    def evaluate_for_insight_live(self, candles: list[dict], live_bar: dict) -> None:
+        """Update Insight with forming bar data. No orders, no position changes."""
+        self._strategy_engine.evaluate_for_insight_live(candles, live_bar)
 
     def on_market_update(
         self, candles: list[dict], live_bar: dict, equity: float,
@@ -203,6 +333,9 @@ class BFATEngine:
         try:
             self._check_state_consistency()
         except RuntimeError:
+            return
+        if self._state_machine.state == PositionState.OPEN:
+            self._check_realtime_tp(live_bar, equity)
             return
         if self._state_machine.state != PositionState.FLAT:
             return
@@ -273,14 +406,12 @@ class BFATEngine:
                 if signal.side == Side.LONG
                 else actual_entry_price + INITIAL_STOP_ATR * atr_val
             )
-            stop_id = _generate_client_order_id("bfat_stop")
+            stop_price = _validate_stop_price(signal.side, stop_price, actual_entry_price, atr_val)
             try:
-                stop_resp = self._execution.place_stop_market_order(
-                    self._symbol, signal.side, actual_size, stop_price, stop_id,
+                sl_order_id, stop_price = self._place_stop_with_retry(
+                    signal.side, actual_size, stop_price, actual_entry_price, atr_val,
                 )
-                if not stop_resp or "orderId" not in stop_resp:
-                    raise RuntimeError("STOP order placement failed")
-                self._current_stop_order_id = _validate_stop_response(stop_resp)
+                self._current_stop_order_id = sl_order_id
             except Exception as e:
                 _close_position_flatten(self._execution, self._symbol, signal.side, actual_size)
                 self._state_machine.rollback_entry()
@@ -297,14 +428,15 @@ class BFATEngine:
                         raise RuntimeError("TP placement failed")
                     tp_algo_id = _validate_stop_response(tp_resp)
                 except Exception as e:
-                    try:
-                        self._execution.cancel_order(self._symbol, self._current_stop_order_id)
-                    except Exception:
-                        pass
-                    self._current_stop_order_id = None
-                    _close_position_flatten(self._execution, self._symbol, signal.side, actual_size)
-                    self._state_machine.rollback_entry()
-                    raise RuntimeError("TP failed after intrabar SL; flattened") from e
+                    logger.warning(
+                        "[TP_REGISTRATION_FAILED] Proceeding without exchange TP; "
+                        "realtime/candle fallback active. err=%s", e,
+                    )
+                    self._system_log.insert(
+                        level="WARNING",
+                        event="tp_registration_failed",
+                        message=f"TP registration failed: {e}. Fallback TP active.",
+                    )
 
             position = Position(
                 symbol=self._symbol,
@@ -509,22 +641,12 @@ class BFATEngine:
                         if signal.side == Side.LONG
                         else actual_entry_price + INITIAL_STOP_ATR * atr_val
                     )
-                stop_id = _generate_client_order_id("bfat_stop")
+                stop_price = _validate_stop_price(signal.side, stop_price, actual_entry_price, atr_val)
                 try:
-                    stop_resp = self._execution.place_stop_market_order(
-                        self._symbol,
-                        signal.side,
-                        actual_size,
-                        stop_price,
-                        stop_id,
+                    sl_order_id, stop_price = self._place_stop_with_retry(
+                        signal.side, actual_size, stop_price, actual_entry_price, atr_val,
                     )
-                    if not stop_resp or "orderId" not in stop_resp:
-                        raise RuntimeError("STOP order placement failed")
-                    logger.info(
-                        "[STOP_ORDER_PLACED]",
-                        extra={"orderId": stop_resp.get("orderId"), "stopPrice": stop_price},
-                    )
-                    self._current_stop_order_id = _validate_stop_response(stop_resp)
+                    self._current_stop_order_id = sl_order_id
                 except Exception as e:
                     _close_position_flatten(
                         self._execution,
@@ -558,23 +680,15 @@ class BFATEngine:
                             },
                         )
                     except Exception as e:
-                        try:
-                            self._execution.cancel_order(
-                                self._symbol, self._current_stop_order_id
-                            )
-                        except Exception:
-                            pass
-                        self._current_stop_order_id = None
-                        _close_position_flatten(
-                            self._execution,
-                            self._symbol,
-                            signal.side,
-                            actual_size,
+                        logger.warning(
+                            "[TP_REGISTRATION_FAILED] Proceeding without exchange TP; "
+                            "realtime/candle fallback active. err=%s", e,
                         )
-                        self._state_machine.rollback_entry()
-                        raise RuntimeError(
-                            "Take-profit algo failed after SL placed; SL cancelled, position flattened"
-                        ) from e
+                        self._system_log.insert(
+                            level="WARNING",
+                            event="tp_registration_failed",
+                            message=f"TP registration failed: {e}. Fallback TP active.",
+                        )
                 position = Position(
                     symbol=self._symbol,
                     side=signal.side,

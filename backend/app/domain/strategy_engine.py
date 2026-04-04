@@ -12,6 +12,7 @@ Features:
 """
 
 import logging
+import time
 from typing import Any, Optional, Union
 
 from app.core.strategy.breakout import BreakoutStrategy
@@ -79,6 +80,7 @@ class StrategyEngine:
         self._last_score: int = 0
         self._last_position_scale: float = 1.0
         self._last_skip_reason: Optional[str] = None
+        self._last_insight_update_ts: float = 0.0
 
     # ── Public API ─────────────────────────────────────────────────
 
@@ -189,6 +191,28 @@ class StrategyEngine:
             self.breakout_strategy.evaluate(candles)
         except Exception:
             logger.exception("evaluate_for_insight: breakout_strategy.evaluate failed")
+        self._last_insight_update_ts = time.time()
+
+    def evaluate_for_insight_live(self, candles: list[dict], live_bar: dict) -> None:
+        """Update Insight using the forming bar without generating trade signals.
+
+        Called on every forming-candle tick so Insight stays fresh even when a
+        position is open and ``evaluate()`` skips entry logic.
+        """
+        regime = self.regime_classifier.evaluate(candles)
+        rc_details = self.regime_classifier.get_last_details()
+        self._active_regime = regime
+        self._last_score = rc_details.get("score", 0)
+        self._last_position_scale = _position_scale_for_score(self._last_score)
+        try:
+            self.range_strategy.update_insight_live(candles, live_bar)
+        except Exception:
+            logger.exception("evaluate_for_insight_live: range_strategy failed")
+        try:
+            self.breakout_strategy.update_insight_live(candles, live_bar)
+        except Exception:
+            logger.exception("evaluate_for_insight_live: breakout_strategy failed")
+        self._last_insight_update_ts = time.time()
 
     def evaluate_ranging_intrabar(
         self,
@@ -247,6 +271,7 @@ class StrategyEngine:
         details["cooldown_remaining"] = self._regime_switch_cooldown
         details["skip_reason"] = self._last_skip_reason
         details["regime_classifier"] = self.regime_classifier.get_last_details()
+        details["last_insight_update_ts"] = self._last_insight_update_ts
 
         bd = self.breakout_strategy.get_last_evaluation_details()
         details["trend_reference"] = {

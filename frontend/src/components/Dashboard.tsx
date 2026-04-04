@@ -94,7 +94,7 @@ export function Dashboard() {
       if (res.ok) { const d: InsightData = await res.json(); setRegime(d.regime ?? null) }
     }
     fetch_()
-    const interval = setInterval(fetch_, 30000)
+    const interval = setInterval(fetch_, 15000)
     return () => { cancelled = true; clearInterval(interval) }
   }, [accessToken])
 

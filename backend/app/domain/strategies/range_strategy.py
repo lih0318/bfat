@@ -280,6 +280,44 @@ class RangeStrategy:
         )
         return None
 
+    def update_insight_live(self, candles: list[dict], live_bar: dict) -> None:
+        """Refresh ``_last_evaluation`` using the forming bar without producing signals."""
+        required_keys = ("open", "high", "low", "close", "volume")
+        if not candles or not all(
+            isinstance(c, dict) and all(k in c for k in required_keys)
+            for c in candles
+        ):
+            return
+
+        ctx = self._compute_range_and_filters(candles)
+        if ctx is None:
+            return
+
+        range_high = ctx["range_high"]
+        range_low = ctx["range_low"]
+        range_mid = ctx["range_mid"]
+        rsi = ctx["rsi"]
+        vol_z = ctx["vol_z"]
+
+        high = live_bar["high"]
+        low = live_bar["low"]
+        close = live_bar["close"]
+
+        _, _, entry_conds = self._check_entry_conditions(
+            high, low, close, range_high, range_low, range_mid, rsi, vol_z,
+        )
+
+        rsi_str = f"{rsi:.2f}" if rsi is not None else "N/A"
+        vol_z_str = f"{vol_z:.2f}" if vol_z is not None else "N/A"
+        reasoning = [
+            f"Range [{range_low:.2f} – {range_high:.2f}]",
+            f"Live: close {close:.2f}, RSI {rsi_str}, vol_z {vol_z_str}",
+        ]
+        self._store_evaluation(
+            range_high, range_low, range_mid, rsi, vol_z, close, reasoning,
+            entry_conditions=entry_conds,
+        )
+
     def evaluate_intrabar(self, candles: list[dict], live_bar: dict) -> Optional[Signal]:
         """Evaluate using the *forming* bar's price action + last-closed-bar filters.
 
