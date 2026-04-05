@@ -194,6 +194,7 @@ class BFATEngine:
         self._system_log = system_log_repository
         self._symbol = symbol
         self._current_stop_order_id: str | None = None
+        self._sl_verified: bool = False
         self._current_tp_algo_id: str | None = None
         self._current_take_profit: float | None = None
         self._last_signal_candle_ts: str = ""
@@ -283,6 +284,95 @@ class BFATEngine:
         raise RuntimeError(
             f"SL placement failed after 2 attempts "
             f"(original={stop_price}, fallback={fallback_stop})"
+        )
+
+    def _place_and_verify_stop(
+        self,
+        side: Side,
+        actual_size: float,
+        stop_price: float,
+        actual_entry_price: float,
+        atr_val: float,
+    ) -> tuple[str, float]:
+        """Place SL, verify it is active on exchange, and recover if needed.
+
+        Returns (verified_order_id, final_stop_price).
+        Raises RuntimeError if SL cannot be confirmed active after recovery.
+        """
+        sl_order_id, final_stop = self._place_stop_with_retry(
+            side, actual_size, stop_price, actual_entry_price, atr_val,
+        )
+
+        if self._execution.verify_algo_order_active(self._symbol, sl_order_id):
+            self._sl_verified = True
+            logger.info("[SL_ORDER_VERIFIED] id=%s stop=%.4f", sl_order_id, final_stop)
+            return sl_order_id, final_stop
+
+        logger.warning(
+            "[SL_VERIFICATION_FAILED] id=%s not active on exchange; attempting recovery",
+            sl_order_id,
+        )
+        self._system_log.insert(
+            level="WARNING",
+            event="sl_verification_failed",
+            message=(
+                f"SL order {sl_order_id} placed but not verified as NEW. "
+                f"side={side.value} entry={actual_entry_price} stop={final_stop}"
+            ),
+        )
+
+        try:
+            self._execution.cancel_order(self._symbol, sl_order_id)
+        except Exception:
+            pass
+
+        safety_stop = (
+            actual_entry_price * (1 - FALLBACK_STOP_PCT)
+            if side == Side.LONG
+            else actual_entry_price * (1 + FALLBACK_STOP_PCT)
+        )
+        safety_stop = self._execution.format_price(
+            self._symbol, safety_stop, ceil=(side == Side.SHORT),
+        )
+        recovery_id = _generate_client_order_id("bfat_stop_recover")
+        try:
+            resp = self._execution.place_stop_market_order(
+                self._symbol, side, actual_size, safety_stop, recovery_id,
+            )
+            if not resp or "orderId" not in resp:
+                raise RuntimeError("Recovery SL placement returned no orderId")
+            recovered_order_id = _validate_stop_response(resp)
+        except Exception as e:
+            logger.error("[SL_RECOVERY_FAILED] err=%s", e)
+            self._system_log.insert(
+                level="ERROR",
+                event="sl_recovery_failed",
+                message=f"SL recovery placement failed: {e}. side={side.value} entry={actual_entry_price}",
+            )
+            self._sl_verified = False
+            raise RuntimeError(
+                f"SL verification and recovery both failed for {side.value} entry={actual_entry_price}"
+            ) from e
+
+        if self._execution.verify_algo_order_active(self._symbol, recovered_order_id):
+            self._sl_verified = True
+            logger.info("[SL_RECOVERY_VERIFIED] id=%s stop=%.4f", recovered_order_id, safety_stop)
+            self._system_log.insert(
+                level="INFO",
+                event="sl_recovery_success",
+                message=f"SL recovered and verified. id={recovered_order_id} stop={safety_stop}",
+            )
+            return recovered_order_id, safety_stop
+
+        logger.error("[SL_RECOVERY_VERIFICATION_FAILED] id=%s", recovered_order_id)
+        self._system_log.insert(
+            level="ERROR",
+            event="sl_recovery_failed",
+            message=f"SL recovery order {recovered_order_id} also not verified as NEW. side={side.value}",
+        )
+        self._sl_verified = False
+        raise RuntimeError(
+            f"SL recovery order {recovered_order_id} not verified active"
         )
 
     def _check_realtime_tp(self, live_bar: dict, equity: float) -> None:
@@ -411,7 +501,7 @@ class BFATEngine:
             )
             stop_price = _validate_stop_price(signal.side, stop_price, actual_entry_price, atr_val)
             try:
-                sl_order_id, stop_price = self._place_stop_with_retry(
+                sl_order_id, stop_price = self._place_and_verify_stop(
                     signal.side, actual_size, stop_price, actual_entry_price, atr_val,
                 )
                 self._current_stop_order_id = sl_order_id
@@ -668,7 +758,7 @@ class BFATEngine:
                     )
                 stop_price = _validate_stop_price(signal.side, stop_price, actual_entry_price, atr_val)
                 try:
-                    sl_order_id, stop_price = self._place_stop_with_retry(
+                    sl_order_id, stop_price = self._place_and_verify_stop(
                         signal.side, actual_size, stop_price, actual_entry_price, atr_val,
                     )
                     self._current_stop_order_id = sl_order_id
@@ -986,6 +1076,7 @@ class BFATEngine:
         except Exception as e:
             raise RuntimeError("State transition failed") from e
         self._current_stop_order_id = None
+        self._sl_verified = False
         self._current_tp_algo_id = None
         self._current_take_profit = None
         self._check_state_consistency()

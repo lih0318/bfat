@@ -16,6 +16,7 @@ interface PositionCardProps {
   currentStopPrice: number | null
   takeProfit: number | null
   tpProtectionMode?: 'exchange' | 'fallback' | 'none'
+  slProtectionMode?: 'exchange' | 'recovering' | 'none'
   rMultiple: number | null
 }
 
@@ -24,7 +25,7 @@ function fmt(v: number | null | undefined, digits = 2): string {
   return v.toFixed(digits)
 }
 
-export function PositionCard({ position, currentStopPrice, takeProfit, tpProtectionMode = 'none', rMultiple }: PositionCardProps) {
+export function PositionCard({ position, currentStopPrice, takeProfit, tpProtectionMode = 'none', slProtectionMode = 'none', rMultiple }: PositionCardProps) {
   if (!position) {
     return (
       <div className="card p-5">
@@ -92,11 +93,28 @@ export function PositionCard({ position, currentStopPrice, takeProfit, tpProtect
               <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[var(--negative)]/20 text-[10px] font-bold text-[var(--negative)]">SL</span>
               <p className="text-[10px] uppercase tracking-wider text-[var(--negative)]/70">Stop Loss</p>
             </div>
-            {position.stop_phase && position.stop_phase !== 'unknown' && (
-              <span className="rounded-md bg-[var(--bg-elevated)] px-1.5 py-0.5 text-[10px] font-medium capitalize text-[var(--text-muted)]">
-                {position.stop_phase}
-              </span>
-            )}
+            <div className="flex items-center gap-1.5">
+              {slProtectionMode === 'exchange' && (
+                <span className="rounded-md bg-[var(--positive)]/15 px-1.5 py-0.5 text-[10px] font-medium text-[var(--positive)]">
+                  Exchange ✓
+                </span>
+              )}
+              {slProtectionMode === 'recovering' && (
+                <span className="rounded-md bg-[var(--warning-muted)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--warning)]">
+                  Recovering
+                </span>
+              )}
+              {slProtectionMode === 'none' && sl <= 0 && (
+                <span className="rounded-md bg-[var(--negative)]/15 px-1.5 py-0.5 text-[10px] font-medium text-[var(--negative)]">
+                  Missing
+                </span>
+              )}
+              {position.stop_phase && position.stop_phase !== 'unknown' && (
+                <span className="rounded-md bg-[var(--bg-elevated)] px-1.5 py-0.5 text-[10px] font-medium capitalize text-[var(--text-muted)]">
+                  {position.stop_phase}
+                </span>
+              )}
+            </div>
           </div>
           <p className="mt-1.5 text-lg font-bold tabular-nums text-[var(--negative)]">
             {sl > 0 ? fmt(sl) : isBinanceLive ? (

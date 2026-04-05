@@ -245,6 +245,8 @@ class EngineService:
                 "take_profit": live_tp_f if live_tp_f and live_tp_f > 0 else None,
                 "tp_protection_mode": "none",
                 "tp_verified": None,
+                "sl_protection_mode": "none",
+                "sl_verified": None,
                 "r_multiple": None,
                 "r_validation_status": None,
                 "system_health": "HEALTHY",
@@ -305,6 +307,15 @@ class EngineService:
         else:
             tp_protection_mode = "none"
         tp_verified = tp_algo_id is not None if tp_protection_mode == "exchange" else None
+        sl_order_id = getattr(self._engine, "_current_stop_order_id", None)
+        sl_verified_flag = getattr(self._engine, "_sl_verified", False)
+        if pos is not None and sl_order_id:
+            sl_protection_mode = "exchange" if sl_verified_flag else "recovering"
+        elif pos is not None:
+            sl_protection_mode = "none"
+        else:
+            sl_protection_mode = "none"
+        sl_verified = sl_verified_flag if sl_protection_mode == "exchange" else None
         unrealized_pnl: float | None = None
         if pos is not None:
             try:
@@ -335,6 +346,8 @@ class EngineService:
             "take_profit": take_profit,
             "tp_protection_mode": tp_protection_mode,
             "tp_verified": tp_verified,
+            "sl_protection_mode": sl_protection_mode,
+            "sl_verified": sl_verified,
             "r_multiple": r_multiple,
             "r_validation_status": r_validation_status,
             "system_health": system_health,
@@ -498,13 +511,41 @@ class EngineService:
 
             if stop_order_id:
                 try:
-                    if not exec_client.verify_algo_order_active(symbol, stop_order_id):
+                    if exec_client.verify_algo_order_active(symbol, stop_order_id):
+                        self._engine._sl_verified = True
+                    else:
                         logger.warning(
-                            "Stop order %s not confirmed as active on exchange for %s",
+                            "Stop order %s not confirmed as active on exchange for %s; "
+                            "attempting re-registration",
                             stop_order_id, symbol,
                         )
+                        self._engine._sl_verified = False
+                        try:
+                            exec_client.cancel_order(symbol, stop_order_id)
+                        except Exception:
+                            pass
+                        re_stop = round(
+                            entry_price * (1 - 0.015) if side == Side.LONG
+                            else entry_price * (1 + 0.015), 2,
+                        )
+                        re_id = _generate_client_order_id("bfat_restore_stop2")
+                        try:
+                            re_resp = exec_client.place_stop_market_order(
+                                symbol, side, size, re_stop, re_id,
+                            )
+                            new_id = str(re_resp.get("orderId", ""))
+                            if new_id and exec_client.verify_algo_order_active(symbol, new_id):
+                                self._engine._current_stop_order_id = new_id
+                                position.stop_price = re_stop
+                                self._engine._sl_verified = True
+                                logger.info("Re-registered and verified SL: %s @ %.2f", new_id, re_stop)
+                            else:
+                                logger.error("Re-registered SL %s still not verified", new_id)
+                        except Exception as e2:
+                            logger.error("SL re-registration failed during sync: %s", e2)
                 except Exception as e:
                     logger.debug("Stop verification check failed: %s", e)
+                    self._engine._sl_verified = False
 
             if tp_order_id:
                 try:

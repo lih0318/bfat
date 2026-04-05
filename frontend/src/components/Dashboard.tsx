@@ -16,6 +16,8 @@ interface StatusData {
   take_profit: number | null
   tp_protection_mode: 'exchange' | 'fallback' | 'none'
   tp_verified: boolean | null
+  sl_protection_mode: 'exchange' | 'recovering' | 'none'
+  sl_verified: boolean | null
   r_multiple: number | null
   r_validation_status: string | null
   system_health: string
@@ -319,6 +321,7 @@ export function Dashboard() {
                   currentStopPrice={status?.current_stop_price ?? null}
                   takeProfit={status?.take_profit ?? null}
                   tpProtectionMode={status?.tp_protection_mode ?? 'none'}
+                  slProtectionMode={status?.sl_protection_mode ?? 'none'}
                   rMultiple={rMultiple}
                 />
               </div>

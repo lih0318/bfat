@@ -37,6 +37,8 @@ class StatusResponse(BaseModel):
     take_profit: Optional[float] = None
     tp_protection_mode: str = "none"
     tp_verified: Optional[bool] = None
+    sl_protection_mode: str = "none"
+    sl_verified: Optional[bool] = None
     equity: float
     kill_switch_triggered: bool
     error: Optional[str] = None
