@@ -217,9 +217,22 @@ class RangeStrategy:
         rsi_str = f"{rsi:.2f}" if rsi is not None else "N/A"
         vol_z_str = f"{vol_z:.2f}" if vol_z is not None else "N/A"
 
+        stop_long = range_low * (1 - STOP_BUFFER)
+        stop_short = range_high * (1 + STOP_BUFFER)
+
         if long_signal:
-            stop = range_low * (1 - STOP_BUFFER)
+            stop = stop_long
             tp = range_mid
+            rr_ok = self._passes_min_rr(Side.LONG, close, stop, tp)
+            risk_l = abs(close - stop)
+            reward_l = abs(tp - close)
+            rr_val = reward_l / risk_l if risk_l > 0 else 0.0
+            entry_conds.append({
+                "label": "Reward/Risk (LONG)",
+                "required": f"≥ {MIN_REWARD_RISK}",
+                "actual": f"{rr_val:.2f}",
+                "met": rr_ok,
+            })
             self._store_evaluation(
                 range_high, range_low, range_mid, rsi, vol_z, close,
                 [
@@ -228,6 +241,8 @@ class RangeStrategy:
                 ],
                 entry_conditions=entry_conds,
             )
+            if not rr_ok:
+                return None
             return Signal(
                 symbol=self._symbol,
                 side=Side.LONG,
@@ -238,8 +253,18 @@ class RangeStrategy:
             )
 
         if short_signal:
-            stop = range_high * (1 + STOP_BUFFER)
+            stop = stop_short
             tp = range_mid
+            rr_ok = self._passes_min_rr(Side.SHORT, close, stop, tp)
+            risk_s = abs(stop - close)
+            reward_s = abs(close - tp)
+            rr_val = reward_s / risk_s if risk_s > 0 else 0.0
+            entry_conds.append({
+                "label": "Reward/Risk (SHORT)",
+                "required": f"≥ {MIN_REWARD_RISK}",
+                "actual": f"{rr_val:.2f}",
+                "met": rr_ok,
+            })
             self._store_evaluation(
                 range_high, range_low, range_mid, rsi, vol_z, close,
                 [
@@ -248,6 +273,8 @@ class RangeStrategy:
                 ],
                 entry_conditions=entry_conds,
             )
+            if not rr_ok:
+                return None
             return Signal(
                 symbol=self._symbol,
                 side=Side.SHORT,
@@ -303,9 +330,34 @@ class RangeStrategy:
         low = live_bar["low"]
         close = live_bar["close"]
 
-        _, _, entry_conds = self._check_entry_conditions(
+        long_signal, short_signal, entry_conds = self._check_entry_conditions(
             high, low, close, range_high, range_low, range_mid, rsi, vol_z,
         )
+
+        stop_long = range_low * (1 - STOP_BUFFER)
+        stop_short = range_high * (1 + STOP_BUFFER)
+        if long_signal:
+            rr_ok = self._passes_min_rr(Side.LONG, close, stop_long, range_mid)
+            risk_l = abs(close - stop_long)
+            reward_l = abs(range_mid - close)
+            rr_val = reward_l / risk_l if risk_l > 0 else 0.0
+            entry_conds.append({
+                "label": "Reward/Risk (LONG)",
+                "required": f"≥ {MIN_REWARD_RISK}",
+                "actual": f"{rr_val:.2f}",
+                "met": rr_ok,
+            })
+        elif short_signal:
+            rr_ok = self._passes_min_rr(Side.SHORT, close, stop_short, range_mid)
+            risk_s = abs(stop_short - close)
+            reward_s = abs(close - range_mid)
+            rr_val = reward_s / risk_s if risk_s > 0 else 0.0
+            entry_conds.append({
+                "label": "Reward/Risk (SHORT)",
+                "required": f"≥ {MIN_REWARD_RISK}",
+                "actual": f"{rr_val:.2f}",
+                "met": rr_ok,
+            })
 
         rsi_str = f"{rsi:.2f}" if rsi is not None else "N/A"
         vol_z_str = f"{vol_z:.2f}" if vol_z is not None else "N/A"

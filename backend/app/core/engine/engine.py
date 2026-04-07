@@ -368,7 +368,6 @@ class BFATEngine:
         Only attempts entry when FLAT + no same-bucket attempt already made.
         The closed-candle `on_candle_close` path is never touched here.
         """
-        self._last_skip_reason = None
         try:
             self._check_state_consistency()
         except RuntimeError:
@@ -383,10 +382,13 @@ class BFATEngine:
             return
         bucket_ts = live_bar.get("timestamp", "")
         if bucket_ts and bucket_ts == self._last_intrabar_entry_bucket_ts:
+            self._last_skip_reason = "already_attempted_this_bar"
             return
         if bucket_ts and bucket_ts == self._last_signal_candle_ts:
+            self._last_skip_reason = "signal_already_used_this_bar"
             return
         if bucket_ts and bucket_ts == self._last_close_candle_ts:
+            self._last_skip_reason = "close_first_wait_next_cycle"
             return
 
         signal = self._strategy_engine.evaluate_ranging_intrabar(
