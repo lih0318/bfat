@@ -863,4 +863,7 @@ class EngineService:
             skip_reason = getattr(self._engine, "_last_skip_reason", None)
         result["skip_reason"] = skip_reason
         result["last_insight_update_ts"] = details.get("last_insight_update_ts", 0)
+        entry_snapshot = getattr(self._engine, "_entry_insight_snapshot", None)
+        if entry_snapshot:
+            result["entry_insight"] = entry_snapshot
         return result

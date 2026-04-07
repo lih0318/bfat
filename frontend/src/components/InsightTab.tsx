@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { apiFetch } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 
@@ -60,6 +60,7 @@ interface InsightData {
   range_reference?: RangeRef
   regime_classifier?: RegimeClassifier
   last_insight_update_ts?: number
+  entry_insight?: Record<string, unknown>
 }
 
 function fmt(v: number | null | undefined, digits = 2, suffix = ''): string {
@@ -98,6 +99,67 @@ function RefRow({ label, value }: { label: string; value: string }) {
     <div className="flex items-baseline justify-between">
       <span className="text-[10px] text-[var(--text-muted)]">{label}</span>
       <span className="text-xs font-medium tabular-nums">{value}</span>
+    </div>
+  )
+}
+
+function EntryInsightSnapshot({ snap }: { snap: Record<string, unknown> }) {
+  const [open, setOpen] = useState(false)
+  const toggle = useCallback(() => setOpen(p => !p), [])
+  const ts = snap.snapshot_time as string | undefined
+  const regime = (snap.regime as string) ?? 'Unknown'
+  const reasoning = (snap.engine_reasoning as string[]) ?? []
+  const conditions = (snap.entry_conditions as EntryCondition[]) ?? []
+
+  return (
+    <div className="card overflow-hidden border border-[var(--accent)]/20">
+      <button
+        onClick={toggle}
+        className="flex w-full items-center justify-between px-5 py-3.5 text-left hover:bg-[var(--bg-elevated)]/50 transition-colors"
+      >
+        <div className="flex items-center gap-2.5">
+          <span className="text-[var(--accent)] text-xs">📸</span>
+          <span className="text-sm font-semibold text-[var(--text)]">Entry Insight Snapshot</span>
+          {ts && <span className="text-[10px] text-[var(--text-muted)]">{ts}</span>}
+          <span className="badge bg-[var(--accent-muted)] text-[var(--accent)] text-[10px]">{regime}</span>
+        </div>
+        <span className={`text-xs text-[var(--text-muted)] transition-transform ${open ? 'rotate-180' : ''}`}>▼</span>
+      </button>
+      {open && (
+        <div className="border-t border-[var(--border-subtle)] px-5 py-4 space-y-3">
+          {conditions.length > 0 && (
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] mb-2">Entry Conditions</p>
+              <div className="space-y-1">
+                {conditions.map((c, i) => (
+                  <div key={i} className="flex items-center gap-2 text-xs">
+                    <span className={`inline-flex h-4 w-4 items-center justify-center rounded-full text-[10px] ${
+                      c.met ? 'bg-[var(--positive-muted)] text-[var(--positive)]' : 'bg-[var(--negative-muted)] text-[var(--negative)]'
+                    }`}>{c.met ? '✓' : '✗'}</span>
+                    <span className="font-medium text-[var(--text-secondary)]">{c.label}</span>
+                    <span className="text-[var(--text-muted)]">{c.required}</span>
+                    <span className="text-[var(--text-muted)]">→</span>
+                    <span className={c.met ? 'text-[var(--positive)]' : 'text-[var(--text-muted)]'}>{c.actual}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {reasoning.length > 0 && (
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] mb-2">Reasoning</p>
+              <ul className="space-y-1">
+                {reasoning.map((r, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-[var(--text-secondary)]">
+                    <span className="mt-1 h-1 w-1 shrink-0 rounded-full bg-[var(--accent)]" />
+                    <span>{r}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -156,6 +218,11 @@ export function InsightTab() {
 
   return (
     <div className="space-y-4">
+
+      {/* Entry Insight Snapshot */}
+      {data?.entry_insight && (
+        <EntryInsightSnapshot snap={data.entry_insight} />
+      )}
 
       {/* Header */}
       <div className="card p-6">

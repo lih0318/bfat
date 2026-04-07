@@ -170,9 +170,8 @@ class BinanceMarketStream:
                                     self._engine.on_candle_close(candles_list, equity)
                                 except (CancelFailureError, NewStopPlacementError):
                                     pass
-                                except RuntimeError:
-                                    self._running = False
-                                    raise
+                                except Exception:
+                                    logger.exception("on_candle_close error (stream continues)")
                                 try:
                                     self._engine.evaluate_for_insight(candles_list)
                                 except Exception:
@@ -195,11 +194,8 @@ class BinanceMarketStream:
                                     )
                                 except (CancelFailureError, NewStopPlacementError):
                                     pass
-                                except RuntimeError:
-                                    self._running = False
-                                    raise
                                 except Exception:
-                                    logger.debug("on_market_update error", exc_info=True)
+                                    logger.exception("on_market_update error (stream continues)")
 
                                 now = time.monotonic()
                                 if now - self._last_live_insight_ts >= _LIVE_INSIGHT_INTERVAL_S:
@@ -218,8 +214,6 @@ class BinanceMarketStream:
                         except Exception:
                             break
             except asyncio.CancelledError:
-                raise
-            except RuntimeError:
                 raise
             except websockets.ConnectionClosed:
                 pass

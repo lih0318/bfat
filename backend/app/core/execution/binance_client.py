@@ -342,6 +342,20 @@ class BinanceExecutionClient:
             pass
         return False
 
+    def cancel_all_algo_orders(self, symbol: str) -> int:
+        """Cancel all CONDITIONAL algo orders for symbol. Returns count cancelled."""
+        cancelled = 0
+        for o in self.get_open_algo_orders(symbol):
+            aid = o.get("algoId")
+            if aid is None:
+                continue
+            try:
+                self.cancel_order(symbol, str(aid))
+                cancelled += 1
+            except Exception:
+                pass
+        return cancelled
+
     def get_user_trades(self, symbol: str, limit: int = 20) -> list[dict]:
         """GET /fapi/v1/userTrades. Returns list of trade dicts (most recent first)."""
         data = self._request("GET", "/fapi/v1/userTrades", {"symbol": symbol, "limit": limit})
