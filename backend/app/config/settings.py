@@ -42,3 +42,6 @@ class Settings(BaseSettings):
     jwt_secret: str = "change-me-in-production"
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    telegram_enabled: bool = False

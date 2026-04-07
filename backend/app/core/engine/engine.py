@@ -186,6 +186,7 @@ class BFATEngine:
         equity_repository: Any,
         system_log_repository: Any,
         symbol: str,
+        notifier: Any | None = None,
     ) -> None:
         self._strategy_engine = strategy_engine
         self._risk_manager = risk_manager
@@ -196,6 +197,7 @@ class BFATEngine:
         self._equity_repo = equity_repository
         self._system_log = system_log_repository
         self._symbol = symbol
+        self._notifier = notifier
         self._current_stop_order_id: str | None = None
         self._sl_verified: bool = False
         self._current_tp_algo_id: str | None = None
@@ -507,6 +509,8 @@ class BFATEngine:
             self._last_signal_candle_ts = bucket_ts
             self._last_intrabar_entry_bucket_ts = bucket_ts
             self._current_take_profit = signal.take_profit
+            if self._notifier:
+                self._notifier.notify_entry(position)
             try:
                 snapshot = self._strategy_engine.get_last_evaluation_details()
                 snapshot["snapshot_time"] = _ts()
@@ -766,6 +770,8 @@ class BFATEngine:
                 self._current_tp_algo_id = tp_algo_id
                 self._last_signal_candle_ts = signal.signal_candle_ts
                 self._current_take_profit = signal.take_profit
+                if self._notifier:
+                    self._notifier.notify_entry(position)
                 try:
                     snapshot = self._strategy_engine.get_last_evaluation_details()
                     snapshot["snapshot_time"] = _ts()
@@ -1089,6 +1095,8 @@ class BFATEngine:
             correlation_id=pos.correlation_id,
         )
         self._equity_repo.insert(ts=_ts(), equity=equity)
+        if self._notifier:
+            self._notifier.notify_exit(pos, exit_price, gross_pnl, net_pnl, r_multiple)
         if self._current_tp_algo_id:
             try:
                 self._execution.cancel_order(

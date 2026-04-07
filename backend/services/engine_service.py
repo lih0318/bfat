@@ -17,6 +17,7 @@ from app.domain.enums import Side, StopPhase
 from app.domain.position import Position
 from app.domain.state_machine import StateMachine
 from app.domain.strategy_engine import StrategyEngine
+from app.core.notification import TelegramNotifier
 from app.persistence import create_persistence
 from app.services.binance_account import BinanceAccountClient
 
@@ -109,6 +110,11 @@ class EngineService:
         risk_manager = RiskManager()
         state_machine = StateMachine()
         strategy_engine = StrategyEngine(symbol=self._settings.bfat_symbol)
+        notifier = TelegramNotifier(
+            bot_token=self._settings.telegram_bot_token,
+            chat_id=self._settings.telegram_chat_id,
+            enabled=self._settings.telegram_enabled,
+        )
         return BFATEngine(
             strategy_engine=strategy_engine,
             risk_manager=risk_manager,
@@ -119,6 +125,7 @@ class EngineService:
             equity_repository=equity_repo,
             system_log_repository=system_log_repo,
             symbol=self._settings.bfat_symbol,
+            notifier=notifier,
         )
 
     _EQUITY_TTL = 15.0  # seconds — fetch from Binance at most once per TTL
