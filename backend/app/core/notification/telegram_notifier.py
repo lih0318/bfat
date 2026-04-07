@@ -58,14 +58,26 @@ class TelegramNotifier:
 
     def notify_entry(self, position: Position) -> None:
         """Send position entry alert."""
-        tp_line = f"\nTP: {position.take_profit:,.2f} USDT" if position.take_profit else ""
-        text = (
-            f"<b>{position.side.value.upper()} 진입 완료</b>\n"
-            f"심볼: {position.symbol}\n"
-            f"진입가: {position.entry_price:,.2f} USDT\n"
-            f"수량: {position.size}\n"
-            f"손절가: {position.stop_price:,.2f} USDT"
+        side = position.side.value.upper()
+        icon = "\U0001f7e2" if side == "LONG" else "\U0001f534"
+        direction = "\U0001f4c8" if side == "LONG" else "\U0001f4c9"
+
+        tp_line = ""
+        if position.take_profit:
+            tp_line = f"\n\U0001f3af TP       : {position.take_profit:,.2f} USDT"
+
+        body = (
+            f"\U0001f4b1 \uc2ec\ubcfc     : {position.symbol}\n"
+            f"\U0001f4b0 \uc9c4\uc785\uac00   : {position.entry_price:,.2f} USDT\n"
+            f"\U0001f4e6 \uc218\ub7c9     : {position.size}\n"
+            f"\U0001f6d1 \uc190\uc808\uac00   : {position.stop_price:,.2f} USDT"
             f"{tp_line}"
+        )
+
+        text = (
+            f"{icon} <b>{side} \ud3ec\uc9c0\uc158 \uc9c4\uc785</b> {direction}\n"
+            f"\n"
+            f"<pre>{body}</pre>"
         )
         self._fire(text)
 
@@ -78,14 +90,36 @@ class TelegramNotifier:
         r_multiple: float,
     ) -> None:
         """Send position exit alert."""
-        pnl_sign = "+" if net_pnl >= 0 else ""
+        win = net_pnl >= 0
+        icon = "\u2705" if win else "\u274c"
+        mood = "\U0001f389" if win else "\U0001f4a8"
+        pnl_sign = "+" if win else ""
         r_sign = "+" if r_multiple >= 0 else ""
+        side = position.side.value.upper()
+
+        pnl_pct = 0.0
+        if position.entry_price > 0:
+            if side == "LONG":
+                pnl_pct = (exit_price - position.entry_price) / position.entry_price * 100
+            else:
+                pnl_pct = (position.entry_price - exit_price) / position.entry_price * 100
+        pct_sign = "+" if pnl_pct >= 0 else ""
+
+        body = (
+            f"\U0001f4b1 \uc2ec\ubcfc     : {position.symbol} | {side}\n"
+            f"\n"
+            f"\u27a1\ufe0f \uc9c4\uc785\uac00   : {position.entry_price:,.2f}\n"
+            f"\u2b05\ufe0f \uccad\uc0b0\uac00   : {exit_price:,.2f}\n"
+            f"\n"
+            f"\U0001f4b5 Gross    : {pnl_sign}{gross_pnl:,.2f} USDT\n"
+            f"\U0001f4b2 Net      : {pnl_sign}{net_pnl:,.2f} USDT\n"
+            f"\U0001f4ca \uc218\uc775\ub960   : {pct_sign}{pnl_pct:.2f}%\n"
+            f"\U0001f3af R\ubc30\uc218    : {r_sign}{r_multiple:.2f}R"
+        )
+
         text = (
-            f"<b>포지션 청산 완료</b>\n"
-            f"심볼: {position.symbol} | {position.side.value.upper()}\n"
-            f"진입가: {position.entry_price:,.2f} → 청산가: {exit_price:,.2f}\n"
-            f"Gross PnL: {pnl_sign}{gross_pnl:,.2f} USDT\n"
-            f"Net PnL: {pnl_sign}{net_pnl:,.2f} USDT\n"
-            f"R배수: {r_sign}{r_multiple:.2f}R"
+            f"{icon} <b>\ud3ec\uc9c0\uc158 \uccad\uc0b0 \uc644\ub8cc</b> {mood}\n"
+            f"\n"
+            f"<pre>{body}</pre>"
         )
         self._fire(text)
