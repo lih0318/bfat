@@ -879,6 +879,26 @@ class BFATEngine:
                 except Exception:
                     logger.warning("[TP_RE_REGISTRATION_FAILED] fallback TP remains active")
 
+            # -- Ranging TP recovery: recalculate from range_mid if missing --
+            if pos.take_profit is None:
+                active_regime = getattr(self._strategy_engine, "_active_regime", None)
+                if active_regime == "RANGING":
+                    rd = self._strategy_engine.range_strategy.get_last_evaluation_details()
+                    range_mid = rd.get("range_mid")
+                    if range_mid is not None and range_mid > 0:
+                        pos.take_profit = range_mid
+                        self._current_take_profit = range_mid
+                        logger.info("[TP_RANGING_RECOVERED] range_mid=%.4f", range_mid)
+                        try:
+                            self._current_tp_algo_id = self._place_tp_with_retry(
+                                pos.side, pos.size, range_mid,
+                            )
+                            logger.info("[TP_RANGING_PLACED] id=%s tp=%.4f",
+                                        self._current_tp_algo_id, range_mid)
+                        except Exception as e:
+                            logger.warning("[TP_RANGING_PLACE_FAILED] err=%s; "
+                                           "fallback TP active", e)
+
             # -- Trailing Stop (Trending positions only: take_profit is None) --
             is_trending_position = pos.take_profit is None
             if is_trending_position and atr_val > 0:

@@ -145,6 +145,7 @@ class StrategyEngine:
 
         # ── 4. Active strategy evaluation ─────────────────────────
         if self._active_regime == "RANGING":
+            self.range_strategy.refresh_range_context(candles)
             self._last_skip_reason = "ranging_deferred_to_intrabar"
             return None
         signal = self._evaluate_active_strategy(candles)

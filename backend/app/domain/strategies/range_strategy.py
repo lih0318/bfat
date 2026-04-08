@@ -88,6 +88,16 @@ class RangeStrategy:
         """Return last evaluation context for insight API."""
         return dict(self._last_evaluation)
 
+    def refresh_range_context(self, candles: list[dict]) -> None:
+        """Update cached range metrics without producing signals."""
+        ctx = self._compute_range_and_filters(candles)
+        if ctx is not None:
+            self._store_evaluation(
+                ctx["range_high"], ctx["range_low"], ctx["range_mid"],
+                ctx["rsi"], ctx["vol_z"], candles[-1]["close"],
+                [], entry_conditions=[],
+            )
+
     # ── Shared helpers ──────────────────────────────────────────────
 
     def _compute_range_and_filters(self, candles: list[dict]) -> Optional[dict]:
