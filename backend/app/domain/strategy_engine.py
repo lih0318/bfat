@@ -79,6 +79,7 @@ class StrategyEngine:
         self._last_score: int = 0
         self._last_position_scale: float = 1.0
         self._last_skip_reason: Optional[str] = None
+        self._last_trend_direction: str = "neutral"
         self._last_insight_update_ts: float = 0.0
 
     # ── Public API ─────────────────────────────────────────────────
@@ -99,6 +100,7 @@ class StrategyEngine:
         regime = self.regime_classifier.evaluate(candles)
         rc_details = self.regime_classifier.get_last_details()
         score = rc_details.get("score", 0)
+        self._last_trend_direction = rc_details.get("trend_direction", "neutral")
 
         regime_changed = (
             self._active_regime is not None and regime != self._active_regime
@@ -180,12 +182,13 @@ class StrategyEngine:
         self._active_regime = regime
         self._last_score = rc_details.get("score", 0)
         self._last_position_scale = _position_scale_for_score(self._last_score)
+        self._last_trend_direction = rc_details.get("trend_direction", "neutral")
         try:
             self.range_strategy.evaluate(candles)
         except Exception:
             logger.exception("evaluate_for_insight: range_strategy.evaluate failed")
         try:
-            self.breakout_strategy.evaluate(candles)
+            self.breakout_strategy.evaluate(candles, self._last_trend_direction)
         except Exception:
             logger.exception("evaluate_for_insight: breakout_strategy.evaluate failed")
         self._last_insight_update_ts = time.time()
@@ -201,12 +204,13 @@ class StrategyEngine:
         self._active_regime = regime
         self._last_score = rc_details.get("score", 0)
         self._last_position_scale = _position_scale_for_score(self._last_score)
+        self._last_trend_direction = rc_details.get("trend_direction", "neutral")
         try:
             self.range_strategy.update_insight_live(candles, live_bar)
         except Exception:
             logger.exception("evaluate_for_insight_live: range_strategy failed")
         try:
-            self.breakout_strategy.update_insight_live(candles, live_bar)
+            self.breakout_strategy.update_insight_live(candles, live_bar, self._last_trend_direction)
         except Exception:
             logger.exception("evaluate_for_insight_live: breakout_strategy failed")
         self._last_insight_update_ts = time.time()
@@ -295,7 +299,7 @@ class StrategyEngine:
         self, candles: list[dict]
     ) -> Optional[Signal]:
         if self._active_regime == "TRENDING":
-            return self.breakout_strategy.evaluate(candles)
+            return self.breakout_strategy.evaluate(candles, self._last_trend_direction)
         if self._active_regime == "RANGING":
             return self.range_strategy.evaluate(candles)
         return None

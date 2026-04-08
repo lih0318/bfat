@@ -110,7 +110,10 @@ class BreakoutStrategy:
         if entry_conditions is not None:
             self._last_evaluation["entry_conditions"] = entry_conditions
 
-    def _compute_core(self, candles: list[dict], close: float) -> Optional[dict]:
+    def _compute_core(
+        self, candles: list[dict], close: float,
+        trend_direction: str = "neutral",
+    ) -> Optional[dict]:
         """Shared computation for evaluate() and update_insight_live()."""
         closes = [c["close"] for c in candles]
 
@@ -137,25 +140,40 @@ class BreakoutStrategy:
         price_below_fast = close < ema_f[-1]
         vol_ok = volume_ratio >= self.VOLUME_RATIO_THRESHOLD
 
-        long_signal = ema_cross_long and price_above_fast and not overextended and vol_ok
-        short_signal = (not ema_cross_long) and price_below_fast and not overextended and vol_ok
+        if trend_direction == "up":
+            signal_side = "LONG"
+        elif trend_direction == "down":
+            signal_side = "SHORT"
+        else:
+            signal_side = "LONG" if ema_cross_long else "SHORT"
 
-        signal_side = "LONG" if ema_cross_long else "SHORT"
+        is_long = signal_side == "LONG"
+        ema_aligned = ema_cross_long if is_long else not ema_cross_long
+        price_aligned = price_above_fast if is_long else price_below_fast
+
+        long_signal = is_long and ema_aligned and price_aligned and not overextended and vol_ok
+        short_signal = (not is_long) and ema_aligned and price_aligned and not overextended and vol_ok
 
         entry_conds = [
             {
-                "label": f"EMA Cross ({signal_side})",
-                "required": (f"EMA({self.EMA_FAST_PERIOD}) > EMA({self.EMA_SLOW_PERIOD})"
-                             if ema_cross_long
-                             else f"EMA({self.EMA_FAST_PERIOD}) < EMA({self.EMA_SLOW_PERIOD})"),
-                "actual": f"{ema_f[-1]:,.2f} vs {ema_s[-1]:,.2f}",
-                "met": True,
+                "label": f"Trend direction ({signal_side})",
+                "required": f"HH/LL → {'up' if is_long else 'down'}",
+                "actual": trend_direction,
+                "met": (trend_direction == "up") if is_long else (trend_direction == "down"),
             },
             {
-                "label": f"Price {'above' if ema_cross_long else 'below'} EMA({self.EMA_FAST_PERIOD})",
-                "required": f"{'>' if ema_cross_long else '<'} {ema_f[-1]:,.2f}",
+                "label": f"EMA Cross ({signal_side})",
+                "required": (f"EMA({self.EMA_FAST_PERIOD}) > EMA({self.EMA_SLOW_PERIOD})"
+                             if is_long
+                             else f"EMA({self.EMA_FAST_PERIOD}) < EMA({self.EMA_SLOW_PERIOD})"),
+                "actual": f"{ema_f[-1]:,.2f} vs {ema_s[-1]:,.2f}",
+                "met": ema_aligned,
+            },
+            {
+                "label": f"Price {'above' if is_long else 'below'} EMA({self.EMA_FAST_PERIOD})",
+                "required": f"{'>' if is_long else '<'} {ema_f[-1]:,.2f}",
                 "actual": f"{close:,.2f}",
-                "met": price_above_fast if ema_cross_long else price_below_fast,
+                "met": price_aligned,
             },
             {
                 "label": "Not overextended",
@@ -185,7 +203,10 @@ class BreakoutStrategy:
             "entry_conds": entry_conds,
         }
 
-    def update_insight_live(self, candles: list[dict], live_bar: dict) -> None:
+    def update_insight_live(
+        self, candles: list[dict], live_bar: dict,
+        trend_direction: str = "neutral",
+    ) -> None:
         """Refresh ``_last_evaluation`` using the forming bar without producing signals."""
         required_keys = ("open", "high", "low", "close", "volume")
         if not candles or not all(
@@ -198,7 +219,7 @@ class BreakoutStrategy:
             return
 
         close = live_bar["close"]
-        ctx = self._compute_core(candles, close)
+        ctx = self._compute_core(candles, close, trend_direction)
         if ctx is None:
             return
 
@@ -219,7 +240,10 @@ class BreakoutStrategy:
             entry_conditions=ctx["entry_conds"],
         )
 
-    def evaluate(self, candles: list[dict]) -> Optional[Signal]:
+    def evaluate(
+        self, candles: list[dict],
+        trend_direction: str = "neutral",
+    ) -> Optional[Signal]:
         """Evaluate closed candles using EMA crossover. Returns Signal or None."""
         required_keys = ("open", "high", "low", "close", "volume")
         if not candles or not all(
@@ -235,7 +259,7 @@ class BreakoutStrategy:
         close = cur["close"]
         signal_time = cur.get("timestamp", "")
 
-        ctx = self._compute_core(candles, close)
+        ctx = self._compute_core(candles, close, trend_direction)
         if ctx is None:
             return None
 
