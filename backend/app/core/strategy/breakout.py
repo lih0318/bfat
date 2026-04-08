@@ -140,24 +140,22 @@ class BreakoutStrategy:
         long_signal = ema_cross_long and price_above_fast and not overextended and vol_ok
         short_signal = (not ema_cross_long) and price_below_fast and not overextended and vol_ok
 
+        signal_side = "LONG" if ema_cross_long else "SHORT"
+
         entry_conds = [
             {
-                "label": "EMA Cross (LONG)",
-                "required": f"EMA({self.EMA_FAST_PERIOD}) > EMA({self.EMA_SLOW_PERIOD})",
+                "label": f"EMA Cross ({signal_side})",
+                "required": (f"EMA({self.EMA_FAST_PERIOD}) > EMA({self.EMA_SLOW_PERIOD})"
+                             if ema_cross_long
+                             else f"EMA({self.EMA_FAST_PERIOD}) < EMA({self.EMA_SLOW_PERIOD})"),
                 "actual": f"{ema_f[-1]:,.2f} vs {ema_s[-1]:,.2f}",
-                "met": ema_cross_long,
+                "met": True,
             },
             {
-                "label": "EMA Cross (SHORT)",
-                "required": f"EMA({self.EMA_FAST_PERIOD}) < EMA({self.EMA_SLOW_PERIOD})",
-                "actual": f"{ema_f[-1]:,.2f} vs {ema_s[-1]:,.2f}",
-                "met": not ema_cross_long,
-            },
-            {
-                "label": f"Price vs EMA({self.EMA_FAST_PERIOD})",
-                "required": "above (LONG) / below (SHORT)",
-                "actual": f"{close:,.2f} vs {ema_f[-1]:,.2f}",
-                "met": price_above_fast or price_below_fast,
+                "label": f"Price {'above' if ema_cross_long else 'below'} EMA({self.EMA_FAST_PERIOD})",
+                "required": f"{'>' if ema_cross_long else '<'} {ema_f[-1]:,.2f}",
+                "actual": f"{close:,.2f}",
+                "met": price_above_fast if ema_cross_long else price_below_fast,
             },
             {
                 "label": "Not overextended",
@@ -183,6 +181,7 @@ class BreakoutStrategy:
             "movement": movement,
             "long_signal": long_signal,
             "short_signal": short_signal,
+            "signal_side": signal_side,
             "entry_conds": entry_conds,
         }
 

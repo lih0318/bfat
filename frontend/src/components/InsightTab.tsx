@@ -318,9 +318,23 @@ export function InsightTab() {
       </div>
 
       {/* Entry Conditions */}
-      {data?.entry_conditions && data.entry_conditions.length > 0 && (
+      {data?.entry_conditions && data.entry_conditions.length > 0 && (() => {
+        const firstLabel = data.entry_conditions![0]?.label ?? ''
+        const side = firstLabel.includes('LONG') ? 'LONG' : firstLabel.includes('SHORT') ? 'SHORT' : null
+        return (
         <div className="card p-6">
-          <p className="section-title mb-3">Entry Conditions</p>
+          <div className="flex items-center gap-2.5 mb-3">
+            <p className="section-title">Entry Conditions</p>
+            {side && (
+              <span className={`badge text-[10px] ${
+                side === 'LONG'
+                  ? 'bg-[var(--positive-muted)] text-[var(--positive)]'
+                  : 'bg-[var(--negative-muted)] text-[var(--negative)]'
+              }`}>
+                {side === 'LONG' ? '▲' : '▼'} {side}
+              </span>
+            )}
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -350,7 +364,8 @@ export function InsightTab() {
             </table>
           </div>
         </div>
-      )}
+        )
+      })()}
 
       {/* Skip Reason */}
       {data?.skip_reason && (
