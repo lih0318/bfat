@@ -96,9 +96,10 @@ def _default_insight():
     return {
         "regime": "Unknown",
         "volatility_score": 0.0,
-        "bb_width_percentile": 0.0,
         "atr_value": 0.0,
         "volume_ratio": 0.0,
+        "ema_fast": 0.0,
+        "ema_slow": 0.0,
         "engine_reasoning": ["Engine service not configured"],
     }
 

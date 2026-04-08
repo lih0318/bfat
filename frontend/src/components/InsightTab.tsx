@@ -4,10 +4,10 @@ import { useAuth } from '../context/AuthContext'
 
 interface TrendRef {
   volatility_score?: number | null
-  bb_width_percentile?: number | null
   atr_value?: number | null
   volume_ratio?: number | null
-  bb_width_z?: number | null
+  ema_fast?: number | null
+  ema_slow?: number | null
 }
 
 interface RangeRef {
@@ -43,16 +43,16 @@ interface InsightData {
   position_scale: number
   cooldown_remaining: number
   volatility_score: number
-  bb_width_percentile: number
   atr_value: number
   volume_ratio: number
+  ema_fast: number
+  ema_slow: number
   rsi?: number | null
   range_high?: number | null
   range_low?: number | null
   range_mid?: number | null
   volume_zscore?: number | null
   close_price?: number | null
-  bb_width_z?: number | null
   engine_reasoning: string[]
   entry_conditions?: EntryCondition[]
   skip_reason?: string | null
@@ -288,8 +288,8 @@ export function InsightTab() {
           </div>
         ) : (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <MetricCard label="Volatility Score" value={fmt(data?.volatility_score ?? tr?.volatility_score, 4)} />
-            <MetricCard label="BB Width %ile" value={fmt(data?.bb_width_percentile ?? tr?.bb_width_percentile, 2, '%')} />
+            <MetricCard label="EMA (12)" value={fmt(data?.ema_fast ?? tr?.ema_fast, 2)} />
+            <MetricCard label="EMA (50)" value={fmt(data?.ema_slow ?? tr?.ema_slow, 2)} />
             <MetricCard label="ATR (14)" value={fmt(data?.atr_value ?? tr?.atr_value, 2)} accent />
             <MetricCard label="Volume Ratio" value={fmt(data?.volume_ratio ?? tr?.volume_ratio, 2, 'x')} />
           </div>
@@ -303,8 +303,8 @@ export function InsightTab() {
         </p>
         {isRanging ? (
           <div className="grid gap-x-6 gap-y-2 sm:grid-cols-2 lg:grid-cols-4">
-            <RefRow label="Volatility" value={fmt(tr?.volatility_score, 4)} />
-            <RefRow label="BB %ile" value={fmt(tr?.bb_width_percentile, 2) + '%'} />
+            <RefRow label="EMA (12)" value={fmt(tr?.ema_fast, 2)} />
+            <RefRow label="EMA (50)" value={fmt(tr?.ema_slow, 2)} />
             <RefRow label="ATR" value={fmt(tr?.atr_value, 2)} />
             <RefRow label="Vol Ratio" value={fmt(tr?.volume_ratio, 2) + 'x'} />
           </div>

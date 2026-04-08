@@ -822,9 +822,10 @@ class EngineService:
             "active_strategy": "Unknown",
             "regime_changed": False,
             "volatility_score": 0.0,
-            "bb_width_percentile": 0.0,
             "atr_value": 0.0,
             "volume_ratio": 0.0,
+            "ema_fast": 0.0,
+            "ema_slow": 0.0,
             "engine_reasoning": ["No evaluation yet. Start the engine to receive insights."],
         }
         if self._engine is None:
@@ -845,14 +846,11 @@ class EngineService:
             "cooldown_remaining": details.get("cooldown_remaining", 0),
             "engine_reasoning": details.get("engine_reasoning", []),
             "volatility_score": details.get("volatility_score", 0.0),
-            "bb_width_percentile": details.get("bb_width_percentile", 0.0),
             "atr_value": details.get("atr_value", 0.0),
             "volume_ratio": details.get("volume_ratio", 0.0),
+            "ema_fast": details.get("ema_fast", 0.0),
+            "ema_slow": details.get("ema_slow", 0.0),
         }
-        if "bb_width_z" in details:
-            result["bb_width_z"] = details["bb_width_z"]
-        if "compression_model" in details:
-            result["compression_model"] = details["compression_model"]
         for k in ("rsi", "range_high", "range_low", "range_mid", "volume_zscore", "close_price"):
             if k in details:
                 result[k] = details[k]

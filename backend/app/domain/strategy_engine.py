@@ -144,6 +144,9 @@ class StrategyEngine:
             return None
 
         # ── 4. Active strategy evaluation ─────────────────────────
+        if self._active_regime == "RANGING":
+            self._last_skip_reason = "ranging_deferred_to_intrabar"
+            return None
         signal = self._evaluate_active_strategy(candles)
 
         if signal is None:
@@ -267,10 +270,10 @@ class StrategyEngine:
         bd = self.breakout_strategy.get_last_evaluation_details()
         details["trend_reference"] = {
             "volatility_score": bd.get("volatility_score"),
-            "bb_width_percentile": bd.get("bb_width_percentile"),
             "atr_value": bd.get("atr_value"),
             "volume_ratio": bd.get("volume_ratio"),
-            "bb_width_z": bd.get("bb_width_z"),
+            "ema_fast": bd.get("ema_fast"),
+            "ema_slow": bd.get("ema_slow"),
         }
         rd = self.range_strategy.get_last_evaluation_details()
         details["range_reference"] = {
