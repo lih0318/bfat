@@ -116,6 +116,7 @@ def _close_position_flatten(
 ATR_PERIOD = 14
 INITIAL_STOP_ATR = 1.2
 TRAILING_ATR_MULTIPLIER = 1.5
+TRAILING_ATR_TIGHTENED = TRAILING_ATR_MULTIPLIER * 0.5  # 0.75 — used when direction conflicts
 BREAKEVEN_R_THRESHOLD = 1.0
 TRAILING_R_THRESHOLD = 2.0
 
@@ -904,6 +905,11 @@ class BFATEngine:
             if is_trending_position and atr_val > 0:
                 active_regime = getattr(self._strategy_engine, "_active_regime", None)
                 if active_regime == "TRENDING":
+                    conflict_tighten = getattr(
+                        self._strategy_engine, "_direction_conflict_tighten", False,
+                    )
+                    atr_mult = TRAILING_ATR_TIGHTENED if conflict_tighten else TRAILING_ATR_MULTIPLIER
+
                     close_price = candles[-1]["close"]
                     initial_risk = abs(pos.entry_price - pos.initial_stop_price) * pos.size
                     if initial_risk > 0:
@@ -922,16 +928,16 @@ class BFATEngine:
                         elif pos.stop_phase == StopPhase.BREAKEVEN and current_r >= TRAILING_R_THRESHOLD:
                             new_phase = StopPhase.TRAILING
                             if pos.side == Side.LONG:
-                                new_stop = close_price - atr_val * TRAILING_ATR_MULTIPLIER
+                                new_stop = close_price - atr_val * atr_mult
                             else:
-                                new_stop = close_price + atr_val * TRAILING_ATR_MULTIPLIER
+                                new_stop = close_price + atr_val * atr_mult
                         elif pos.stop_phase == StopPhase.TRAILING:
                             if pos.side == Side.LONG:
-                                candidate = close_price - atr_val * TRAILING_ATR_MULTIPLIER
+                                candidate = close_price - atr_val * atr_mult
                                 if candidate > pos.stop_price:
                                     new_stop = candidate
                             else:
-                                candidate = close_price + atr_val * TRAILING_ATR_MULTIPLIER
+                                candidate = close_price + atr_val * atr_mult
                                 if candidate < pos.stop_price:
                                     new_stop = candidate
 

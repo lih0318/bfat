@@ -81,6 +81,7 @@ class StrategyEngine:
         self._last_skip_reason: Optional[str] = None
         self._last_trend_direction: str = "neutral"
         self._last_insight_update_ts: float = 0.0
+        self._direction_conflict_tighten: bool = False
 
     # ── Public API ─────────────────────────────────────────────────
 
@@ -310,6 +311,22 @@ class StrategyEngine:
         """Exit signals from regime classifier context (ADX / BB width / structure)."""
         _ = candles, position
         d = self.regime_classifier.get_last_details()
+
+        # -- Direction conflict graduated response (TRENDING only) --
+        self._direction_conflict_tighten = False
+        if self._active_regime == "TRENDING":
+            td = d.get("trend_direction", "neutral")
+            ts = d.get("trend_strength", "neutral")
+            if td != "neutral":
+                is_conflict = (
+                    (position.side == Side.LONG and td == "down")
+                    or (position.side == Side.SHORT and td == "up")
+                )
+                if is_conflict and ts == "strong":
+                    return CloseSignal(reason="Trend Direction Reversal")
+                if is_conflict and ts == "moderate":
+                    self._direction_conflict_tighten = True
+
         adx = d.get("adx")
         if adx is not None and float(adx) < _ADX_WEAK_EXIT:
             return CloseSignal(reason="ADX Weakening")
