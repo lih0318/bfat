@@ -30,6 +30,9 @@ interface StatusData {
 
 interface InsightData {
   regime: string
+  regime_classifier?: {
+    trend_direction?: 'up' | 'down' | 'neutral'
+  }
 }
 
 type TabId = 'dashboard' | 'insight' | 'trades' | 'logs' | 'chart'
@@ -49,6 +52,7 @@ export function Dashboard() {
   const [activeTab, setActiveTab] = useState<TabId>('dashboard')
   const [userOpen, setUserOpen] = useState(false)
   const [regime, setRegime] = useState<string | null>(null)
+  const [trendDirection, setTrendDirection] = useState<'up' | 'down' | 'neutral' | null>(null)
   const [startLoading, setStartLoading] = useState(false)
   const [stopLoading, setStopLoading] = useState(false)
   const [controlError, setControlError] = useState<string | null>(null)
@@ -97,7 +101,7 @@ export function Dashboard() {
     async function fetch_() {
       const res = await apiFetch('/api/insight', { token: accessToken })
       if (cancelled) return
-      if (res.ok) { const d: InsightData = await res.json(); setRegime(d.regime ?? null) }
+      if (res.ok) { const d: InsightData = await res.json(); setRegime(d.regime ?? null); setTrendDirection(d.regime_classifier?.trend_direction ?? null) }
     }
     fetch_()
     const interval = setInterval(fetch_, 15000)
@@ -180,6 +184,16 @@ export function Dashboard() {
                     : 'bg-[var(--border)]/30 text-[var(--text-muted)]'
               }`}>
                 {regime}
+              </span>
+            )}
+
+            {trendDirection && trendDirection !== 'neutral' && (
+              <span className={`badge ${
+                trendDirection === 'up'
+                  ? 'bg-[var(--positive-muted)] text-[var(--positive)]'
+                  : 'bg-[var(--negative-muted)] text-[var(--negative)]'
+              }`}>
+                {trendDirection === 'up' ? '▲ Up' : '▼ Down'}
               </span>
             )}
 
