@@ -903,8 +903,7 @@ class BFATEngine:
             is_trending_position = pos.take_profit is None
             if is_trending_position and atr_val > 0:
                 active_regime = getattr(self._strategy_engine, "_active_regime", None)
-                regime_name = active_regime.name if active_regime else ""
-                if regime_name == "TRENDING":
+                if active_regime == "TRENDING":
                     close_price = candles[-1]["close"]
                     initial_risk = abs(pos.entry_price - pos.initial_stop_price) * pos.size
                     if initial_risk > 0:

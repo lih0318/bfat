@@ -49,7 +49,7 @@ export function PositionCard({ position, currentStopPrice, takeProfit, tpProtect
 
   const sl = currentStopPrice ?? position.stop_price
   const tp = takeProfit
-  const isTrailingTP = tp == null
+  const isTrailingTP = tpProtectionMode === 'trailing'
   const isBinanceLive = position.source === 'binance'
 
   return (
@@ -140,16 +140,23 @@ export function PositionCard({ position, currentStopPrice, takeProfit, tpProtect
                 Fallback
               </span>
             )}
+            {tpProtectionMode === 'trailing' && (
+              <span className="rounded-md bg-[var(--positive)]/15 px-1.5 py-0.5 text-[10px] font-medium text-[var(--positive)]">
+                Trailing
+              </span>
+            )}
             {tpProtectionMode === 'none' && tp == null && (
-              <span className="rounded-md bg-[var(--bg-elevated)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-muted)]">
-                미설정
+              <span className="rounded-md bg-[var(--warning-muted)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--warning)]">
+                복구 대기
               </span>
             )}
           </div>
           {isTrailingTP ? (
             <p className="mt-1.5 text-sm font-medium text-[var(--positive)]/70">트레일링 스탑으로 관리</p>
-          ) : (
+          ) : tp != null ? (
             <p className="mt-1.5 text-lg font-bold tabular-nums text-[var(--positive)]">{fmt(tp)}</p>
+          ) : (
+            <p className="mt-1.5 text-sm font-medium text-[var(--warning)]">TP 미설정</p>
           )}
         </div>
       </div>
