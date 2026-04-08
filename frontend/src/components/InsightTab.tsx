@@ -26,6 +26,7 @@ interface RegimeClassifier {
   ll_ratio?: number | null
   score?: number | null
   trend_direction?: 'up' | 'down' | 'neutral'
+  trend_strength?: 'weak' | 'moderate' | 'strong' | 'neutral'
 }
 
 interface EntryCondition {
@@ -239,11 +240,27 @@ export function InsightTab() {
           <div className="flex flex-wrap items-center gap-2">
             <span className={`badge ${regimeClass}`}>
               {regime}
-              {isTrending && rc?.trend_direction && rc.trend_direction !== 'neutral' && (
-                <span className="ml-1.5 font-normal normal-case text-[var(--text-secondary)]">
-                  {rc.trend_direction === 'up' ? '↑ Up' : '↓ Down'}
-                </span>
-              )}
+              {isTrending && rc?.trend_direction && rc.trend_direction !== 'neutral' && (() => {
+                const isUp = rc.trend_direction === 'up'
+                const s = rc.trend_strength ?? 'moderate'
+                let arrow: string
+                let label: string
+                if (s === 'strong') {
+                  arrow = isUp ? '▲' : '▼'
+                  label = isUp ? '강한 Up' : '강한 Down'
+                } else if (s === 'moderate') {
+                  arrow = isUp ? '↑' : '↓'
+                  label = isUp ? 'Up' : 'Down'
+                } else {
+                  arrow = isUp ? '↗' : '↘'
+                  label = isUp ? 'Up 경향' : 'Down 경향'
+                }
+                return (
+                  <span className={`ml-1.5 font-normal normal-case ${s === 'weak' ? 'opacity-75' : ''} text-[var(--text-secondary)]`}>
+                    {arrow} {label}
+                  </span>
+                )
+              })()}
             </span>
             {data?.regime_score != null && (
               <span className="badge bg-[var(--bg-elevated)] text-[var(--text-muted)]">Score {data.regime_score}/3</span>

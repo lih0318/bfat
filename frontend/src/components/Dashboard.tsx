@@ -32,6 +32,7 @@ interface InsightData {
   regime: string
   regime_classifier?: {
     trend_direction?: 'up' | 'down' | 'neutral'
+    trend_strength?: 'weak' | 'moderate' | 'strong' | 'neutral'
   }
 }
 
@@ -53,6 +54,7 @@ export function Dashboard() {
   const [userOpen, setUserOpen] = useState(false)
   const [regime, setRegime] = useState<string | null>(null)
   const [trendDirection, setTrendDirection] = useState<'up' | 'down' | 'neutral' | null>(null)
+  const [trendStrength, setTrendStrength] = useState<'weak' | 'moderate' | 'strong' | 'neutral' | null>(null)
   const [startLoading, setStartLoading] = useState(false)
   const [stopLoading, setStopLoading] = useState(false)
   const [controlError, setControlError] = useState<string | null>(null)
@@ -101,7 +103,7 @@ export function Dashboard() {
     async function fetch_() {
       const res = await apiFetch('/api/insight', { token: accessToken })
       if (cancelled) return
-      if (res.ok) { const d: InsightData = await res.json(); setRegime(d.regime ?? null); setTrendDirection(d.regime_classifier?.trend_direction ?? null) }
+      if (res.ok) { const d: InsightData = await res.json(); setRegime(d.regime ?? null); setTrendDirection(d.regime_classifier?.trend_direction ?? null); setTrendStrength(d.regime_classifier?.trend_strength ?? null) }
     }
     fetch_()
     const interval = setInterval(fetch_, 15000)
@@ -187,15 +189,33 @@ export function Dashboard() {
               </span>
             )}
 
-            {trendDirection && trendDirection !== 'neutral' && (
-              <span className={`badge ${
-                trendDirection === 'up'
-                  ? 'bg-[var(--positive-muted)] text-[var(--positive)]'
-                  : 'bg-[var(--negative-muted)] text-[var(--negative)]'
-              }`}>
-                {trendDirection === 'up' ? '▲ Up' : '▼ Down'}
-              </span>
-            )}
+            {trendDirection && trendDirection !== 'neutral' && (() => {
+              const isUp = trendDirection === 'up'
+              const s = trendStrength ?? 'moderate'
+              let arrow: string
+              let label: string
+              let opacity = ''
+              if (s === 'strong') {
+                arrow = isUp ? '▲' : '▼'
+                label = isUp ? '강한 Up' : '강한 Down'
+              } else if (s === 'moderate') {
+                arrow = isUp ? '▲' : '▼'
+                label = isUp ? 'Up' : 'Down'
+              } else {
+                arrow = isUp ? '↗' : '↘'
+                label = isUp ? 'Up 경향' : 'Down 경향'
+                opacity = 'opacity-75'
+              }
+              return (
+                <span className={`badge ${opacity} ${
+                  isUp
+                    ? 'bg-[var(--positive-muted)] text-[var(--positive)]'
+                    : 'bg-[var(--negative-muted)] text-[var(--negative)]'
+                }`}>
+                  {arrow} {label}
+                </span>
+              )
+            })()}
 
             {status?.system_health === 'DEGRADED' && (
               <span className="badge bg-[var(--warning-muted)] text-[var(--warning)]">DEGRADED</span>

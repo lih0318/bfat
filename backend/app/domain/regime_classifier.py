@@ -231,15 +231,24 @@ class RegimeClassifier:
                     self._regime_counter = 0
 
         trend_direction = "neutral"
+        trend_strength = "neutral"
         if hh_ratio is not None and ll_ratio is not None:
+            gap = abs(hh_ratio - ll_ratio)
             if hh_ratio > ll_ratio:
                 trend_direction = "up"
             elif ll_ratio > hh_ratio:
                 trend_direction = "down"
+            if gap >= 0.2:
+                trend_strength = "strong"
+            elif gap >= 0.1:
+                trend_strength = "moderate"
+            else:
+                trend_strength = "weak"
 
         self._last_details = {
             "regime": self._current_regime,
             "trend_direction": trend_direction,
+            "trend_strength": trend_strength,
             "adx": round(adx, 4) if adx is not None else None,
             "bb_width_percentile": round(bb_pct, 2) if bb_pct is not None else None,
             "hh_ratio": round(hh_ratio, 4) if hh_ratio is not None else None,

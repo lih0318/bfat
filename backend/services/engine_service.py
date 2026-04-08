@@ -6,6 +6,8 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+import requests
+
 from app.config.settings import Settings
 from app.core.database import DatabaseFactory
 from app.core.engine import BFATEngine
@@ -581,6 +583,40 @@ class EngineService:
                 side.value, symbol, size, entry_price, stop_price, stop_order_id,
                 take_profit_price, tp_order_id,
             )
+
+            # Pre-evaluate regime so regime_changed detection works on first tick
+            if sm.position is not None:
+                try:
+                    kline_url = f"{exec_client._base_url}/fapi/v1/klines"
+                    kline_params = {"symbol": symbol.upper(), "interval": "15m", "limit": 100}
+                    kline_resp = requests.get(kline_url, params=kline_params, timeout=10)
+                    if kline_resp.status_code == 200:
+                        raw = kline_resp.json()
+                        candles = []
+                        for bar in raw:
+                            if len(bar) < 6:
+                                continue
+                            candles.append({
+                                "open": float(bar[1]),
+                                "high": float(bar[2]),
+                                "low": float(bar[3]),
+                                "close": float(bar[4]),
+                                "volume": float(bar[5]),
+                                "timestamp": str(bar[6]),
+                            })
+                        if candles:
+                            se = self._engine._strategy_engine
+                            pre_regime = se.regime_classifier.evaluate(candles)
+                            se._active_regime = pre_regime
+                            rc_details = se.regime_classifier.get_last_details()
+                            se._last_trend_direction = rc_details.get("trend_direction", "neutral")
+                            logger.info(
+                                "Pre-evaluated regime for restored position: %s (trend=%s)",
+                                pre_regime, se._last_trend_direction,
+                            )
+                except Exception as e:
+                    logger.warning("Regime pre-evaluation failed (non-fatal): %s", e)
+
         except Exception as e:
             logger.warning("Binance position sync failed: %s", e)
 
