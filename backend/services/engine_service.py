@@ -319,7 +319,7 @@ class EngineService:
         if pos is not None and sl_order_id:
             sl_protection_mode = "exchange" if sl_verified_flag else "recovering"
         elif pos is not None:
-            sl_protection_mode = "none"
+            sl_protection_mode = "recovering"
         else:
             sl_protection_mode = "none"
         sl_verified = sl_verified_flag if sl_protection_mode == "exchange" else None
@@ -470,25 +470,34 @@ class EngineService:
                     stop_order_id = None
 
             if stop_order_id is None:
-                safety_pct = 0.015
-                if side == Side.LONG:
-                    stop_price = round(entry_price * (1 - safety_pct), 2)
-                else:
-                    stop_price = round(entry_price * (1 + safety_pct), 2)
-                try:
-                    stop_resp = exec_client.place_stop_market_order(
-                        symbol, side, size, stop_price,
-                        _generate_client_order_id("bfat_restore_stop"),
+                _SAFETY_MARGINS = [0.015, 0.030, 0.050]
+                for margin in _SAFETY_MARGINS:
+                    if side == Side.LONG:
+                        stop_price = round(entry_price * (1 - margin), 2)
+                    else:
+                        stop_price = round(entry_price * (1 + margin), 2)
+                    try:
+                        stop_resp = exec_client.place_stop_market_order(
+                            symbol, side, size, stop_price,
+                            _generate_client_order_id("bfat_restore_stop"),
+                        )
+                        stop_order_id = str(stop_resp.get("orderId", ""))
+                        logger.info(
+                            "Placed safety stop for restored position: %s @ %.2f (margin=%.1f%%)",
+                            stop_order_id, stop_price, margin * 100,
+                        )
+                        break
+                    except Exception as e:
+                        logger.warning(
+                            "Safety SL at %.1f%% failed: %s", margin * 100, e,
+                        )
+                        continue
+                if stop_order_id is None:
+                    logger.error(
+                        "All SL placement attempts failed for %s %s. "
+                        "Restoring position without SL; recovery will be attempted at runtime.",
+                        side.value, symbol,
                     )
-                    stop_order_id = str(stop_resp.get("orderId", ""))
-                    logger.info("Placed safety stop for restored position: %s @ %.2f", stop_order_id, stop_price)
-                except Exception as e:
-                    logger.warning(
-                        "Cannot fully restore position: stop order placement failed (%s). "
-                        "Position will still appear via Binance fallback.",
-                        e,
-                    )
-                    return
 
             update_ts = pos_data.get("updateTime") or pos_data.get("update_time")
             if update_ts:

@@ -2,6 +2,7 @@
 
 import hashlib
 import logging
+import time
 from datetime import datetime
 from decimal import Decimal, getcontext
 from typing import Any
@@ -208,6 +209,9 @@ class BFATEngine:
         self._last_skip_reason: str | None = None
         self._pending_fallback_close: bool = False
         self._entry_insight_snapshot: dict | None = None
+        self._last_sl_recover_ts: float = 0.0
+
+    _SL_RECOVER_COOLDOWN = 30.0
 
     def _check_state_consistency(self) -> None:
         """Raise if engine state is inconsistent."""
@@ -217,7 +221,7 @@ class BFATEngine:
             if pos is None:
                 raise RuntimeError("Inconsistent state: OPEN without position")
             if self._current_stop_order_id is None:
-                raise RuntimeError("Invariant: OPEN must have _current_stop_order_id")
+                logger.warning("[STATE_WARN] OPEN without _current_stop_order_id; SL recovery needed")
         if state == PositionState.FLAT:
             if pos is not None:
                 raise RuntimeError("Inconsistent state: FLAT with position")
@@ -225,6 +229,35 @@ class BFATEngine:
                 raise RuntimeError("Invariant: FLAT must have _current_stop_order_id None")
             if self._current_tp_algo_id is not None:
                 raise RuntimeError("Invariant: FLAT must have _current_tp_algo_id None")
+
+    def _try_recover_sl(self, candles: list[dict]) -> None:
+        """Attempt to place a missing SL order with throttling."""
+        now = time.monotonic()
+        if now - self._last_sl_recover_ts < self._SL_RECOVER_COOLDOWN:
+            return
+        self._last_sl_recover_ts = now
+
+        pos = self._state_machine.position
+        if pos is None:
+            return
+        atr_val = _atr(candles, ATR_PERIOD)
+        stop_price = _validate_stop_price(
+            pos.side, pos.stop_price, pos.entry_price, atr_val,
+        )
+        try:
+            sl_id, final_stop = self._place_stop_with_retry(
+                pos.side, pos.size, stop_price, pos.entry_price, atr_val,
+            )
+            self._current_stop_order_id = sl_id
+            self._sl_verified = True
+            pos.stop_price = final_stop
+            logger.info("[SL_RECOVERED] id=%s stop=%.4f", sl_id, final_stop)
+            self._system_log.insert(
+                level="INFO", event="sl_recovered",
+                message=f"SL recovered: {sl_id} @ {final_stop:.4f}",
+            )
+        except Exception as e:
+            logger.warning("[SL_RECOVER_FAILED] err=%s; will retry in %.0fs", e, self._SL_RECOVER_COOLDOWN)
 
     def _cleanup_stale_algo_orders(self) -> None:
         """Cancel any lingering SL/TP algo orders before new entry."""
@@ -375,6 +408,8 @@ class BFATEngine:
         except RuntimeError:
             return
         if self._state_machine.state == PositionState.OPEN:
+            if self._current_stop_order_id is None:
+                self._try_recover_sl(candles)
             self._check_realtime_tp(live_bar, equity)
             return
         if self._state_machine.state != PositionState.FLAT:
@@ -816,11 +851,21 @@ class BFATEngine:
                         )
                         return
             else:
-                logger.error("[SL_ORDER_ID_MISSING] flattening position")
-                _close_position_flatten(
-                    self._execution, self._symbol, pos.side, pos.size,
-                )
-                return
+                logger.warning("[SL_ORDER_ID_MISSING] attempting emergency SL placement")
+                try:
+                    sl_id, new_stop = self._place_stop_with_retry(
+                        pos.side, pos.size, pos.stop_price, pos.entry_price, atr_val,
+                    )
+                    self._current_stop_order_id = sl_id
+                    self._sl_verified = True
+                    pos.stop_price = new_stop
+                    logger.info("[SL_EMERGENCY_PLACED] id=%s stop=%.4f", sl_id, new_stop)
+                except Exception as e:
+                    logger.error("[SL_EMERGENCY_FAILED] err=%s; flattening", e)
+                    _close_position_flatten(
+                        self._execution, self._symbol, pos.side, pos.size,
+                    )
+                    return
 
             # -- Deferred TP health check (Ranging: TP should exist but algo_id missing) --
             tp = pos.take_profit
