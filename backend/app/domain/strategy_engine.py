@@ -131,6 +131,8 @@ class StrategyEngine:
 
         # ── 2. Open position: strategy-driven exit (no new entries) ─
         if current_position is not None:
+            if self._active_regime == "RANGING":
+                self.range_strategy.refresh_range_context(candles)
             exit_sig = self._evaluate_strategy_exit(candles, current_position)
             if exit_sig is not None:
                 return exit_sig
