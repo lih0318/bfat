@@ -49,6 +49,14 @@ def _floor_to_step(value: float, step: float, precision: int) -> float:
     return round(math.floor(value / step) * step, precision)
 
 
+def _format_decimal(value: float, max_decimals: int = 8) -> str:
+    """Format float to string without scientific notation and trailing zeros."""
+    formatted = f"{value:.{max_decimals}f}"
+    if "." in formatted:
+        formatted = formatted.rstrip("0").rstrip(".")
+    return formatted
+
+
 class BinanceExecutionClient:
     """REST-based Binance USDT-M Futures order client."""
 
@@ -107,7 +115,14 @@ class BinanceExecutionClient:
 
     def _post_algo_order(self, params: dict[str, Any]) -> dict:
         """POST /fapi/v1/algoOrder (conditional STOP / TAKE_PROFIT, etc.)."""
-        return self._request("POST", "/fapi/v1/algoOrder", params)
+        resp = self._request("POST", "/fapi/v1/algoOrder", params)
+        if isinstance(resp, dict):
+            code = resp.get("code")
+            if code is not None and int(code) < 0:
+                raise RuntimeError(
+                    f"Algo order rejected: code={code} msg={resp.get('msg')}"
+                )
+        return resp
 
     @staticmethod
     def _normalize_algo_response(resp: dict) -> dict:
@@ -234,7 +249,7 @@ class BinanceExecutionClient:
             "symbol": symbol,
             "side": _side_to_binance(side, for_reduce_only=True),
             "type": "STOP_MARKET",
-            "triggerPrice": str(trigger_px),
+            "triggerPrice": _format_decimal(trigger_px),
             "workingType": "CONTRACT_PRICE",
             "closePosition": "true",
             "positionSide": "BOTH",
@@ -243,6 +258,8 @@ class BinanceExecutionClient:
         resp = self._post_algo_order(params)
         if not isinstance(resp, dict):
             raise RuntimeError(f"Unexpected algo order response: {type(resp).__name__}")
+        if not resp.get("algoId"):
+            raise RuntimeError(f"Algo order missing algoId: {resp}")
         return self._normalize_algo_response(resp)
 
     def place_take_profit_market_order(
@@ -270,7 +287,7 @@ class BinanceExecutionClient:
             "symbol": symbol,
             "side": _side_to_binance(side, for_reduce_only=True),
             "type": "TAKE_PROFIT_MARKET",
-            "triggerPrice": str(trigger_px),
+            "triggerPrice": _format_decimal(trigger_px),
             "workingType": "CONTRACT_PRICE",
             "closePosition": "true",
             "positionSide": "BOTH",
@@ -279,6 +296,8 @@ class BinanceExecutionClient:
         resp = self._post_algo_order(params)
         if not isinstance(resp, dict):
             raise RuntimeError(f"Unexpected algo order response: {type(resp).__name__}")
+        if not resp.get("algoId"):
+            raise RuntimeError(f"Algo order missing algoId: {resp}")
         return self._normalize_algo_response(resp)
 
     def cancel_order(self, symbol: str, order_id: str) -> dict:
