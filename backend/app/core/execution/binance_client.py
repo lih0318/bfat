@@ -234,9 +234,10 @@ class BinanceExecutionClient:
             "symbol": symbol,
             "side": _side_to_binance(side, for_reduce_only=True),
             "type": "STOP_MARKET",
-            "triggerPrice": trigger_px,
+            "triggerPrice": str(trigger_px),
             "workingType": "CONTRACT_PRICE",
-            "closePosition": True,
+            "closePosition": "true",
+            "positionSide": "BOTH",
             "clientAlgoId": client_order_id[:36],
         }
         resp = self._post_algo_order(params)
@@ -269,9 +270,10 @@ class BinanceExecutionClient:
             "symbol": symbol,
             "side": _side_to_binance(side, for_reduce_only=True),
             "type": "TAKE_PROFIT_MARKET",
-            "triggerPrice": trigger_px,
+            "triggerPrice": str(trigger_px),
             "workingType": "CONTRACT_PRICE",
-            "closePosition": True,
+            "closePosition": "true",
+            "positionSide": "BOTH",
             "clientAlgoId": client_order_id[:36],
         }
         resp = self._post_algo_order(params)
