@@ -815,7 +815,9 @@ class BFATEngine:
                 except Exception:
                     pass
                 self._check_state_consistency()
-            except RuntimeError:
+            except RuntimeError as e:
+                if self._state_machine.state == PositionState.ENTERING:
+                    self._state_machine.rollback_entry()
                 raise
             except Exception as e:
                 if self._state_machine.state == PositionState.ENTERING:
