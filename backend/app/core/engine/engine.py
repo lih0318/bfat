@@ -559,6 +559,8 @@ class BFATEngine:
                 signal.side.value, actual_entry_price, actual_size, bucket_ts,
             )
         except RuntimeError:
+            if self._state_machine.state == PositionState.ENTERING:
+                self._state_machine.rollback_entry()
             raise
         except Exception as e:
             if self._state_machine.state == PositionState.ENTERING:
