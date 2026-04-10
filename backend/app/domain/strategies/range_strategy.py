@@ -17,10 +17,10 @@ from app.domain.signal import Signal
 
 
 # ─── Fixed parameters ──────────────────────────────────────────────
-RANGE_LOOKBACK = 20
+RANGE_LOOKBACK = 48
 RSI_PERIOD = 14
 ENTRY_THRESHOLD = 0.0025
-STOP_BUFFER = 0.002
+STOP_BUFFER = 0.004
 RSI_LONG = 38
 RSI_SHORT = 62
 VOLUME_LOOKBACK = 20

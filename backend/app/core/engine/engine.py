@@ -1020,6 +1020,7 @@ class BFATEngine:
                 self._execution.cancel_order(self._symbol, self._current_tp_algo_id)
             except Exception:
                 pass
+            self._current_tp_algo_id = None
         if self._current_stop_order_id:
             try:
                 self._execution.cancel_order(
@@ -1027,6 +1028,7 @@ class BFATEngine:
                 )
             except Exception:
                 pass
+            self._current_stop_order_id = None
         close_side = Side.SHORT if pos.side == Side.LONG else Side.LONG
         resp = self._execution.place_market_order(
             self._symbol,
