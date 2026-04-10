@@ -22,10 +22,11 @@ _EXCHANGE_INFO_TTL = 3600  # re-fetch exchange info every 1 hour
 
 
 def _generate_client_order_id(prefix: str) -> str:
-    """Generate unique client order ID (timestamp + random suffix)."""
+    """Generate unique client order ID (max 36 chars for Binance compatibility)."""
     ts = int(time.time() * 1000)
     suffix = hashlib.sha256(os.urandom(8)).hexdigest()[:6]
-    return f"{prefix}_{ts}_{suffix}"
+    raw = f"{prefix}_{ts}_{suffix}"
+    return raw[:36]
 
 
 def _side_to_binance(side: Side, for_reduce_only: bool = False) -> str:
