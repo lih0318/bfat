@@ -582,7 +582,7 @@ class EngineService:
                 take_profit_price, tp_order_id,
             )
 
-            # Pre-evaluate regime so regime_changed detection works on first tick
+            # Pre-evaluate regime and recover missing TP
             if sm.position is not None:
                 try:
                     kline_url = f"{exec_client._base_url}/fapi/v1/klines"
@@ -612,11 +612,55 @@ class EngineService:
                                 "Pre-evaluated regime for restored position: %s (trend=%s)",
                                 pre_regime, se._last_trend_direction,
                             )
+
+                            # TP recovery: if no TP on exchange, calculate from ATR
+                            if take_profit_price is None and self._engine._current_tp_algo_id is None:
+                                self._recover_tp_from_atr(candles, position, exec_client)
                 except Exception as e:
                     logger.warning("Regime pre-evaluation failed (non-fatal): %s", e)
 
         except Exception as e:
             logger.warning("Binance position sync failed: %s", e)
+
+    _TP_ATR_MULTIPLIER = 2.4
+    _SL_ATR_MULTIPLIER = 1.2
+
+    def _recover_tp_from_atr(
+        self, candles: list[dict], position: Position, exec_client: BinanceExecutionClient,
+    ) -> None:
+        """Calculate and place a missing TP order using ATR for any regime."""
+        if len(candles) < 15:
+            return
+        tr_list = [0.0]
+        for i in range(1, len(candles)):
+            h, lo, pc = candles[i]["high"], candles[i]["low"], candles[i - 1]["close"]
+            tr_list.append(max(h - lo, abs(h - pc), abs(lo - pc)))
+        atr_val = sum(tr_list[-14:]) / 14
+        if atr_val <= 0:
+            return
+        if position.side == Side.LONG:
+            tp_price = position.entry_price + self._TP_ATR_MULTIPLIER * atr_val
+        else:
+            tp_price = position.entry_price - self._TP_ATR_MULTIPLIER * atr_val
+        tp_price = round(tp_price, 2)
+        if tp_price <= 0:
+            return
+        try:
+            tp_id = _generate_client_order_id("bfat_restore_tp")
+            tp_resp = exec_client.place_take_profit_market_order(
+                position.symbol, position.side, position.size, tp_price, tp_id,
+            )
+            algo_id = str(tp_resp.get("orderId", ""))
+            if algo_id:
+                self._engine._current_tp_algo_id = algo_id
+                position.take_profit = tp_price
+                self._engine._current_take_profit = tp_price
+                logger.info(
+                    "TP recovered for restored position: %s @ %.2f (ATR×%.1f)",
+                    algo_id, tp_price, self._TP_ATR_MULTIPLIER,
+                )
+        except Exception as e:
+            logger.warning("TP recovery during sync failed (non-fatal): %s", e)
 
     async def _run(self) -> None:
         """Background: start streams and run until stopped."""

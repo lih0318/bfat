@@ -880,25 +880,39 @@ class BFATEngine:
                 except Exception:
                     logger.warning("[TP_RE_REGISTRATION_FAILED] fallback TP remains active")
 
-            # -- TP recovery: recalculate from range_mid if missing (RANGING only) --
-            if pos.take_profit is None:
+            # -- TP recovery: calculate and place TP if missing --
+            if pos.take_profit is None and atr_val > 0:
                 active_regime = getattr(self._strategy_engine, "_active_regime", None)
+                tp_price: float | None = None
+
                 if active_regime == "RANGING":
                     rd = self._strategy_engine.range_strategy.get_last_evaluation_details()
                     range_mid = rd.get("range_mid")
                     if range_mid is not None and range_mid > 0:
-                        pos.take_profit = range_mid
-                        self._current_take_profit = range_mid
-                        logger.info("[TP_RANGING_RECOVERED] range_mid=%.4f", range_mid)
-                        try:
-                            self._current_tp_algo_id = self._place_tp_with_retry(
-                                pos.side, pos.size, range_mid,
-                            )
-                            logger.info("[TP_RANGING_PLACED] id=%s tp=%.4f",
-                                        self._current_tp_algo_id, range_mid)
-                        except Exception as e:
-                            logger.warning("[TP_RANGING_PLACE_FAILED] err=%s; "
-                                           "fallback TP active", e)
+                        tp_price = range_mid
+                elif active_regime == "TRENDING":
+                    _TP_ATR_MULT = 2.4
+                    if pos.side == Side.LONG:
+                        tp_price = pos.entry_price + _TP_ATR_MULT * atr_val
+                    else:
+                        tp_price = pos.entry_price - _TP_ATR_MULT * atr_val
+
+                if tp_price is not None and tp_price > 0:
+                    tp_price = self._execution.format_price(
+                        self._symbol, tp_price, ceil=(pos.side == Side.LONG),
+                    )
+                    pos.take_profit = tp_price
+                    self._current_take_profit = tp_price
+                    logger.info("[TP_RECOVERED] regime=%s tp=%.4f", active_regime, tp_price)
+                    try:
+                        self._current_tp_algo_id = self._place_tp_with_retry(
+                            pos.side, pos.size, tp_price,
+                        )
+                        logger.info("[TP_RECOVERED_PLACED] id=%s tp=%.4f",
+                                    self._current_tp_algo_id, tp_price)
+                    except Exception as e:
+                        logger.warning("[TP_RECOVERY_PLACE_FAILED] err=%s; "
+                                       "fallback TP active", e)
 
             # -- Logical candle-close TP fallback (TP set but no exchange algo) --
             if tp is not None and not self._current_tp_algo_id:
