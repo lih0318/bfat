@@ -75,6 +75,8 @@ class BreakoutStrategy:
     OVEREXTENSION_LOOKBACK = 10
     ATR_PERIOD = 14
     ATR_OVEREXTENSION = 2.5
+    SL_ATR_MULTIPLIER = 1.2
+    TP_ATR_MULTIPLIER = 2.4  # R:R = 1:2
 
     def __init__(self, symbol: str = "BTCUSDT") -> None:
         self._symbol = symbol
@@ -279,22 +281,38 @@ class BreakoutStrategy:
             return None
 
         if ctx["long_signal"]:
+            atr = ctx["current_atr"]
+            sl_price = close - self.SL_ATR_MULTIPLIER * atr
+            tp_price = close + self.TP_ATR_MULTIPLIER * atr
             reasoning.append(f"LONG: EMA bullish cross, close {close:,.2f} > EMA({self.EMA_FAST_PERIOD}) {ctx['ema_fast_val']:,.2f}, vol ratio {ctx['volume_ratio']:.2f}")
+            reasoning.append(f"SL={sl_price:,.2f} (ATR×{self.SL_ATR_MULTIPLIER}), TP={tp_price:,.2f} (ATR×{self.TP_ATR_MULTIPLIER})")
             self._store_evaluation(
                 ctx["current_atr"], ctx["volume_ratio"], "Trending", reasoning,
                 close, ema_fast=ctx["ema_fast_val"], ema_slow=ctx["ema_slow_val"],
                 entry_conditions=ctx["entry_conds"],
             )
-            return Signal(symbol=self._symbol, side=Side.LONG, signal_time=signal_time, signal_candle_ts=signal_time)
+            return Signal(
+                symbol=self._symbol, side=Side.LONG,
+                signal_time=signal_time, signal_candle_ts=signal_time,
+                stop_price=sl_price, take_profit=tp_price,
+            )
 
         if ctx["short_signal"]:
+            atr = ctx["current_atr"]
+            sl_price = close + self.SL_ATR_MULTIPLIER * atr
+            tp_price = close - self.TP_ATR_MULTIPLIER * atr
             reasoning.append(f"SHORT: EMA bearish cross, close {close:,.2f} < EMA({self.EMA_FAST_PERIOD}) {ctx['ema_fast_val']:,.2f}, vol ratio {ctx['volume_ratio']:.2f}")
+            reasoning.append(f"SL={sl_price:,.2f} (ATR×{self.SL_ATR_MULTIPLIER}), TP={tp_price:,.2f} (ATR×{self.TP_ATR_MULTIPLIER})")
             self._store_evaluation(
                 ctx["current_atr"], ctx["volume_ratio"], "Trending", reasoning,
                 close, ema_fast=ctx["ema_fast_val"], ema_slow=ctx["ema_slow_val"],
                 entry_conditions=ctx["entry_conds"],
             )
-            return Signal(symbol=self._symbol, side=Side.SHORT, signal_time=signal_time, signal_candle_ts=signal_time)
+            return Signal(
+                symbol=self._symbol, side=Side.SHORT,
+                signal_time=signal_time, signal_candle_ts=signal_time,
+                stop_price=sl_price, take_profit=tp_price,
+            )
 
         if ctx["volume_ratio"] < self.VOLUME_RATIO_THRESHOLD:
             reasoning.append(f"Volume ratio {ctx['volume_ratio']:.2f} < {self.VOLUME_RATIO_THRESHOLD} → insufficient volume")

@@ -314,9 +314,7 @@ class EngineService:
         if take_profit is not None and float(take_profit) > 0:
             tp_protection_mode = "exchange" if tp_algo_id else "fallback"
         else:
-            se = getattr(self._engine, "_strategy_engine", None)
-            regime_str = getattr(se, "_active_regime", None) if se else None
-            tp_protection_mode = "trailing" if regime_str == "TRENDING" else "none"
+            tp_protection_mode = "none"
         tp_verified = tp_algo_id is not None if tp_protection_mode == "exchange" else None
         sl_order_id = getattr(self._engine, "_current_stop_order_id", None)
         sl_verified_flag = getattr(self._engine, "_sl_verified", False)

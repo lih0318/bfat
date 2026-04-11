@@ -81,7 +81,7 @@ class StrategyEngine:
         self._last_skip_reason: Optional[str] = None
         self._last_trend_direction: str = "neutral"
         self._last_insight_update_ts: float = 0.0
-        self._direction_conflict_tighten: bool = False
+        self._direction_conflict_close: bool = False
 
     # ── Public API ─────────────────────────────────────────────────
 
@@ -313,14 +313,14 @@ class StrategyEngine:
         RANGING positions exit only via SL/TP — no strategy-driven exit here.
         """
         _ = candles, position
-        self._direction_conflict_tighten = False
+        self._direction_conflict_close = False
 
         if self._active_regime != "TRENDING":
             return None
 
         d = self.regime_classifier.get_last_details()
 
-        # -- Direction conflict graduated response --
+        # -- Direction conflict: close on strong or moderate reversal --
         td = d.get("trend_direction", "neutral")
         ts = d.get("trend_strength", "neutral")
         if td != "neutral":
@@ -329,9 +329,9 @@ class StrategyEngine:
                 or (position.side == Side.SHORT and td == "up")
             )
             if is_conflict and ts == "strong":
-                return CloseSignal(reason="Trend Direction Reversal")
+                return CloseSignal(reason="Trend Direction Reversal (strong)")
             if is_conflict and ts == "moderate":
-                self._direction_conflict_tighten = True
+                return CloseSignal(reason="Trend Direction Reversal (moderate)")
 
         adx = d.get("adx")
         if adx is not None and float(adx) < _ADX_WEAK_EXIT:

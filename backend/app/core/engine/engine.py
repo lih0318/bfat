@@ -115,10 +115,6 @@ def _close_position_flatten(
 
 ATR_PERIOD = 14
 INITIAL_STOP_ATR = 1.2
-TRAILING_ATR_MULTIPLIER = 1.5
-TRAILING_ATR_TIGHTENED = TRAILING_ATR_MULTIPLIER * 0.5  # 0.75 — used when direction conflicts
-BREAKEVEN_R_THRESHOLD = 1.0
-TRAILING_R_THRESHOLD = 2.0
 
 
 def _atr(candles: list[dict], period: int = 14) -> float:
@@ -827,7 +823,7 @@ class BFATEngine:
                 raise RuntimeError("Entry failure") from e
             return
 
-        # ── OPEN → deferred health check, trailing stop, logical TP fallback.
+        # ── OPEN → deferred SL/TP health check, logical TP fallback.
         if self._state_machine.state == PositionState.OPEN:
             pos = self._state_machine.position
             if pos is None:
@@ -884,7 +880,7 @@ class BFATEngine:
                 except Exception:
                     logger.warning("[TP_RE_REGISTRATION_FAILED] fallback TP remains active")
 
-            # -- Ranging TP recovery: recalculate from range_mid if missing --
+            # -- TP recovery: recalculate from range_mid if missing (RANGING only) --
             if pos.take_profit is None:
                 active_regime = getattr(self._strategy_engine, "_active_regime", None)
                 if active_regime == "RANGING":
@@ -904,84 +900,7 @@ class BFATEngine:
                             logger.warning("[TP_RANGING_PLACE_FAILED] err=%s; "
                                            "fallback TP active", e)
 
-            # -- Trailing Stop (Trending positions only: take_profit is None) --
-            is_trending_position = pos.take_profit is None
-            if is_trending_position and atr_val > 0:
-                active_regime = getattr(self._strategy_engine, "_active_regime", None)
-                if active_regime == "TRENDING":
-                    conflict_tighten = getattr(
-                        self._strategy_engine, "_direction_conflict_tighten", False,
-                    )
-                    atr_mult = TRAILING_ATR_TIGHTENED if conflict_tighten else TRAILING_ATR_MULTIPLIER
-
-                    close_price = candles[-1]["close"]
-                    initial_risk = abs(pos.entry_price - pos.initial_stop_price) * pos.size
-                    if initial_risk > 0:
-                        if pos.side == Side.LONG:
-                            unrealized = (close_price - pos.entry_price) * pos.size
-                        else:
-                            unrealized = (pos.entry_price - close_price) * pos.size
-                        current_r = unrealized / initial_risk
-
-                        new_phase = pos.stop_phase
-                        new_stop = pos.stop_price
-
-                        if pos.stop_phase == StopPhase.INITIAL and current_r >= BREAKEVEN_R_THRESHOLD:
-                            new_phase = StopPhase.BREAKEVEN
-                            new_stop = pos.entry_price
-                        elif pos.stop_phase == StopPhase.BREAKEVEN and current_r >= TRAILING_R_THRESHOLD:
-                            new_phase = StopPhase.TRAILING
-                            if pos.side == Side.LONG:
-                                new_stop = close_price - atr_val * atr_mult
-                            else:
-                                new_stop = close_price + atr_val * atr_mult
-                        elif pos.stop_phase == StopPhase.TRAILING:
-                            if pos.side == Side.LONG:
-                                candidate = close_price - atr_val * atr_mult
-                                if candidate > pos.stop_price:
-                                    new_stop = candidate
-                            else:
-                                candidate = close_price + atr_val * atr_mult
-                                if candidate < pos.stop_price:
-                                    new_stop = candidate
-
-                        new_stop = self._execution.format_price(
-                            self._symbol, new_stop, ceil=(pos.side == Side.SHORT),
-                        )
-                        if new_stop != pos.stop_price and new_phase != pos.stop_phase or (
-                            pos.stop_phase == StopPhase.TRAILING and new_stop != pos.stop_price
-                        ):
-                            try:
-                                self._execution.cancel_order(self._symbol, self._current_stop_order_id)
-                            except Exception:
-                                pass
-                            try:
-                                new_id = _generate_client_order_id("bfat_trail")
-                                resp = self._execution.place_stop_market_order(
-                                    self._symbol, pos.side, pos.size, new_stop, new_id,
-                                )
-                                if resp and "orderId" in resp:
-                                    self._current_stop_order_id = _validate_stop_response(resp)
-                                    self._state_machine.on_stop_update(new_phase, new_stop)
-                                    logger.info(
-                                        "[TRAILING_STOP_UPDATED] phase=%s stop=%.4f R=%.2f",
-                                        new_phase.value, new_stop, current_r,
-                                    )
-                            except Exception as e:
-                                logger.error("[TRAILING_STOP_UPDATE_FAILED] err=%s", e)
-                                try:
-                                    sl_id, _ = self._place_stop_with_retry(
-                                        pos.side, pos.size, pos.stop_price,
-                                        pos.entry_price, atr_val,
-                                    )
-                                    self._current_stop_order_id = sl_id
-                                except Exception:
-                                    _close_position_flatten(
-                                        self._execution, self._symbol, pos.side, pos.size,
-                                    )
-                                    return
-
-            # -- Logical candle-close TP fallback (Ranging: TP set but no exchange algo) --
+            # -- Logical candle-close TP fallback (TP set but no exchange algo) --
             if tp is not None and not self._current_tp_algo_id:
                 close_px = candles[-1]["close"]
                 hit = (
