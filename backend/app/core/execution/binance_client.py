@@ -253,11 +253,10 @@ class BinanceExecutionClient:
         stop_price: float,
         client_order_id: str,
     ) -> dict:
-        """Place STOP_MARKET with 3-tier fallback:
+        """Place STOP_MARKET via Algo API with 2-tier fallback.
 
-        1) Algo API + closePosition (preferred, closes full position)
-        2) Algo API + quantity + reduceOnly (v1 fallback)
-        3) Regular order API + closePosition (final fallback)
+        1) quantity + reduceOnly  — works immediately after entry (no position recognition needed)
+        2) 0.5s delay + closePosition — reliable when position is settled
         """
         quantity = self.format_quantity(symbol, quantity)
         sl_ceil = side == Side.SHORT
@@ -268,8 +267,9 @@ class BinanceExecutionClient:
             raise ValueError("stop_price must be positive")
         binance_side = _side_to_binance(side, for_reduce_only=True)
         trigger_str = _format_decimal(trigger_px)
+        qty_str = _format_decimal(quantity)
 
-        # Attempt 1: Algo API + closePosition
+        # Attempt 1: Algo API + quantity + reduceOnly (works immediately after entry)
         try:
             params: dict[str, Any] = {
                 "algoType": "CONDITIONAL",
@@ -277,59 +277,45 @@ class BinanceExecutionClient:
                 "side": binance_side,
                 "type": "STOP_MARKET",
                 "triggerPrice": trigger_str,
+                "quantity": qty_str,
+                "reduceOnly": "true",
                 "workingType": "CONTRACT_PRICE",
-                "closePosition": "true",
                 "positionSide": "BOTH",
                 "clientAlgoId": client_order_id[:36],
             }
             resp = self._post_algo_order(params)
             if isinstance(resp, dict) and resp.get("algoId"):
+                logger.info("[SL_PLACED_QTY_REDUCE] algoId=%s trigger=%s qty=%s",
+                            resp["algoId"], trigger_str, qty_str)
                 return self._normalize_algo_response(resp)
         except Exception as e:
-            logger.warning("[SL_ALGO_CLOSE_POSITION_FAILED] %s", e)
+            logger.warning("[SL_ALGO_QTY_REDUCE_FAILED] %s", e)
 
-        # Attempt 2: Algo API + quantity + reduceOnly (v1 fallback)
+        # Attempt 2: wait for position settlement, then closePosition
+        time.sleep(0.5)
         try:
-            retry_id = _generate_client_order_id("bfat_sl_r")
+            retry_id = _generate_client_order_id("bfat_sl_cp")
             params2: dict[str, Any] = {
                 "algoType": "CONDITIONAL",
                 "symbol": symbol,
                 "side": binance_side,
                 "type": "STOP_MARKET",
                 "triggerPrice": trigger_str,
-                "quantity": _format_decimal(quantity),
-                "reduceOnly": "true",
                 "workingType": "CONTRACT_PRICE",
+                "closePosition": "true",
                 "positionSide": "BOTH",
                 "clientAlgoId": retry_id[:36],
             }
             resp = self._post_algo_order(params2)
             if isinstance(resp, dict) and resp.get("algoId"):
+                logger.info("[SL_PLACED_CLOSE_POS] algoId=%s trigger=%s",
+                            resp["algoId"], trigger_str)
                 return self._normalize_algo_response(resp)
         except Exception as e:
-            logger.warning("[SL_ALGO_REDUCE_ONLY_FAILED] %s", e)
-
-        # Attempt 3: Regular order API + closePosition
-        try:
-            retry_id2 = _generate_client_order_id("bfat_sl_o")
-            params3: dict[str, Any] = {
-                "symbol": symbol,
-                "side": binance_side,
-                "type": "STOP_MARKET",
-                "stopPrice": trigger_str,
-                "closePosition": "true",
-                "workingType": "CONTRACT_PRICE",
-                "positionSide": "BOTH",
-                "newClientOrderId": retry_id2[:36],
-            }
-            resp = self._post_order(params3)
-            if isinstance(resp, dict) and resp.get("orderId"):
-                return resp
-        except Exception as e:
-            logger.warning("[SL_REGULAR_ORDER_FAILED] %s", e)
+            logger.warning("[SL_ALGO_CLOSE_POSITION_FAILED] %s", e)
 
         raise RuntimeError(
-            f"SL placement failed all 3 methods for {symbol} trigger={trigger_str}"
+            f"SL placement failed all methods for {symbol} trigger={trigger_str}"
         )
 
     def place_take_profit_market_order(
@@ -340,11 +326,10 @@ class BinanceExecutionClient:
         take_profit_price: float,
         client_order_id: str,
     ) -> dict:
-        """Place TAKE_PROFIT_MARKET with 3-tier fallback:
+        """Place TAKE_PROFIT_MARKET via Algo API with 2-tier fallback.
 
-        1) Algo API + closePosition (preferred)
-        2) Algo API + quantity + reduceOnly (v1 fallback)
-        3) Regular order API + closePosition (final fallback)
+        1) quantity + reduceOnly  — works immediately after entry
+        2) 0.5s delay + closePosition — reliable when position is settled
         """
         quantity = self.format_quantity(symbol, quantity)
         tp_ceil = side == Side.LONG
@@ -355,8 +340,9 @@ class BinanceExecutionClient:
             raise ValueError("take_profit_price must be positive")
         binance_side = _side_to_binance(side, for_reduce_only=True)
         trigger_str = _format_decimal(trigger_px)
+        qty_str = _format_decimal(quantity)
 
-        # Attempt 1: Algo API + closePosition
+        # Attempt 1: Algo API + quantity + reduceOnly (works immediately after entry)
         try:
             params: dict[str, Any] = {
                 "algoType": "CONDITIONAL",
@@ -364,59 +350,45 @@ class BinanceExecutionClient:
                 "side": binance_side,
                 "type": "TAKE_PROFIT_MARKET",
                 "triggerPrice": trigger_str,
+                "quantity": qty_str,
+                "reduceOnly": "true",
                 "workingType": "CONTRACT_PRICE",
-                "closePosition": "true",
                 "positionSide": "BOTH",
                 "clientAlgoId": client_order_id[:36],
             }
             resp = self._post_algo_order(params)
             if isinstance(resp, dict) and resp.get("algoId"):
+                logger.info("[TP_PLACED_QTY_REDUCE] algoId=%s trigger=%s qty=%s",
+                            resp["algoId"], trigger_str, qty_str)
                 return self._normalize_algo_response(resp)
         except Exception as e:
-            logger.warning("[TP_ALGO_CLOSE_POSITION_FAILED] %s", e)
+            logger.warning("[TP_ALGO_QTY_REDUCE_FAILED] %s", e)
 
-        # Attempt 2: Algo API + quantity + reduceOnly
+        # Attempt 2: wait for position settlement, then closePosition
+        time.sleep(0.5)
         try:
-            retry_id = _generate_client_order_id("bfat_tp_r")
+            retry_id = _generate_client_order_id("bfat_tp_cp")
             params2: dict[str, Any] = {
                 "algoType": "CONDITIONAL",
                 "symbol": symbol,
                 "side": binance_side,
                 "type": "TAKE_PROFIT_MARKET",
                 "triggerPrice": trigger_str,
-                "quantity": _format_decimal(quantity),
-                "reduceOnly": "true",
                 "workingType": "CONTRACT_PRICE",
+                "closePosition": "true",
                 "positionSide": "BOTH",
                 "clientAlgoId": retry_id[:36],
             }
             resp = self._post_algo_order(params2)
             if isinstance(resp, dict) and resp.get("algoId"):
+                logger.info("[TP_PLACED_CLOSE_POS] algoId=%s trigger=%s",
+                            resp["algoId"], trigger_str)
                 return self._normalize_algo_response(resp)
         except Exception as e:
-            logger.warning("[TP_ALGO_REDUCE_ONLY_FAILED] %s", e)
-
-        # Attempt 3: Regular order API + closePosition
-        try:
-            retry_id2 = _generate_client_order_id("bfat_tp_o")
-            params3: dict[str, Any] = {
-                "symbol": symbol,
-                "side": binance_side,
-                "type": "TAKE_PROFIT_MARKET",
-                "stopPrice": trigger_str,
-                "closePosition": "true",
-                "workingType": "CONTRACT_PRICE",
-                "positionSide": "BOTH",
-                "newClientOrderId": retry_id2[:36],
-            }
-            resp = self._post_order(params3)
-            if isinstance(resp, dict) and resp.get("orderId"):
-                return resp
-        except Exception as e:
-            logger.warning("[TP_REGULAR_ORDER_FAILED] %s", e)
+            logger.warning("[TP_ALGO_CLOSE_POSITION_FAILED] %s", e)
 
         raise RuntimeError(
-            f"TP placement failed all 3 methods for {symbol} trigger={trigger_str}"
+            f"TP placement failed all methods for {symbol} trigger={trigger_str}"
         )
 
     def cancel_order(self, symbol: str, order_id: str) -> dict:
