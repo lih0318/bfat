@@ -12,6 +12,27 @@ interface LogEntry {
   correlation_id: string | null
 }
 
+const kstFormatter = new Intl.DateTimeFormat('ko-KR', {
+  timeZone: 'Asia/Seoul',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false,
+})
+
+function formatKst(utcIso: string): string {
+  try {
+    const date = new Date(utcIso.endsWith('Z') ? utcIso : utcIso + 'Z')
+    if (isNaN(date.getTime())) return utcIso
+    return kstFormatter.format(date) + ' KST'
+  } catch {
+    return utcIso
+  }
+}
+
 const LEVEL_STYLES: Record<string, { border: string; bg: string; text: string }> = {
   ERROR: { border: 'border-l-[var(--negative)]', bg: 'bg-[var(--negative-muted)]', text: 'text-[var(--negative)]' },
   CRITICAL: { border: 'border-l-[var(--negative)]', bg: 'bg-[var(--negative-muted)]', text: 'text-[var(--negative)]' },
@@ -70,7 +91,7 @@ export function LogsPanel() {
               const style = LEVEL_STYLES[log.level] ?? DEFAULT_STYLE
               return (
                 <div key={log.id} className={`rounded-r-lg border-l-[3px] px-3 py-2 ${style.border} ${style.bg}`}>
-                  <span className="tabular-nums text-[var(--text-muted)]">{log.ts}</span>{' '}
+                  <span className="tabular-nums text-[var(--text-muted)]">{formatKst(log.ts)}</span>{' '}
                   <span className={`font-semibold ${style.text}`}>[{log.level}]</span>{' '}
                   <span className="font-medium text-[var(--text-secondary)]">{log.event}</span>
                   <span className="text-[var(--text-muted)]">: {log.message}</span>

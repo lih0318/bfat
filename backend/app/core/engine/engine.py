@@ -670,39 +670,11 @@ class BFATEngine:
             pos = self._state_machine.position
             if pos is not None:
                 try:
-                    live = self._execution.get_position(self._symbol)
-                    amt_raw = live.get("positionAmt") or live.get("position_amt") or 0
-                    amt = float(amt_raw)
-                    if abs(amt) < 1e-8:
+                    if self._is_position_flat_on_exchange():
                         if not self._pending_fallback_close:
                             self._pending_fallback_close = True
                             return
-                        trades = self._execution.get_user_trades(self._symbol, limit=10)
-                        if len(trades) == 0:
-                            return
-                        try:
-                            entry_ts = int(
-                                datetime.fromisoformat(pos.entry_time.replace("Z", "")).timestamp() * 1000
-                            )
-                        except (ValueError, TypeError, AttributeError):
-                            return
-                        total_qty = 0.0
-                        total_value = 0.0
-                        for t in trades:
-                            trade_time = int(t.get("time", 0))
-                            if trade_time < entry_ts:
-                                continue
-                            qty = float(t.get("qty", 0))
-                            price = float(t.get("price", 0))
-                            is_buyer = t.get("buyer")
-                            if pos.side == Side.LONG:
-                                is_exit = not is_buyer
-                            else:
-                                is_exit = bool(is_buyer)
-                            if qty > 0 and is_exit:
-                                total_qty += qty
-                                total_value += qty * price
-                        exit_price = total_value / total_qty if total_qty > 0 else None
+                        exit_price = self._resolve_exit_price_from_trades(pos)
                         if exit_price is None:
                             return
                         self._system_log.insert(
@@ -737,11 +709,28 @@ class BFATEngine:
                         message=result.reason,
                     )
                 except Exception as e:
-                    self._system_log.insert(
-                        level="ERROR",
-                        event="market_close_failed",
-                        message=f"Close signal failed: {e}. Will retry next candle.",
-                    )
+                    pos = self._state_machine.position
+                    if pos is not None and self._is_position_flat_on_exchange():
+                        exit_price = self._resolve_exit_price_from_trades(pos)
+                        if exit_price is not None:
+                            self._system_log.insert(
+                                level="WARNING",
+                                event="market_close_confirmed_after_sync",
+                                message=f"Close signal raised error but position flat. Exit: {exit_price:.4f}",
+                            )
+                            self.on_position_closed(exit_price, equity)
+                        else:
+                            self._system_log.insert(
+                                level="ERROR",
+                                event="market_close_failed",
+                                message=f"Close signal failed, position flat but no exit price from trades: {e}",
+                            )
+                    else:
+                        self._system_log.insert(
+                            level="ERROR",
+                            event="market_close_failed",
+                            message=f"Close signal failed: {e}. Will retry next candle.",
+                        )
             is_close_first = "Close First" in result.reason
             self._last_skip_reason = (
                 "close_first_wait_next_cycle" if is_close_first else "close_signal"
@@ -1030,16 +1019,77 @@ class BFATEngine:
                     return
             self._check_state_consistency()
 
+    def _resolve_exit_price_from_trades(self, pos) -> float | None:
+        """Derive exit price from recent userTrades after entry. Returns None if unavailable."""
+        try:
+            trades = self._execution.get_user_trades(self._symbol, limit=10)
+            if not trades:
+                return None
+            try:
+                entry_ts = int(
+                    datetime.fromisoformat(pos.entry_time.replace("Z", "")).timestamp() * 1000
+                )
+            except (ValueError, TypeError, AttributeError):
+                return None
+            total_qty = 0.0
+            total_value = 0.0
+            for t in trades:
+                trade_time = int(t.get("time", 0))
+                if trade_time < entry_ts:
+                    continue
+                qty = float(t.get("qty", 0))
+                price = float(t.get("price", 0))
+                is_buyer = t.get("buyer")
+                if pos.side == Side.LONG:
+                    is_exit = not is_buyer
+                else:
+                    is_exit = bool(is_buyer)
+                if qty > 0 and is_exit:
+                    total_qty += qty
+                    total_value += qty * price
+            return total_value / total_qty if total_qty > 0 else None
+        except Exception:
+            return None
+
+    def _is_position_flat_on_exchange(self) -> bool:
+        """Check if exchange position amount is effectively zero."""
+        try:
+            live = self._execution.get_position(self._symbol)
+            amt_raw = live.get("positionAmt") or live.get("position_amt") or 0
+            return abs(float(amt_raw)) < 1e-8
+        except Exception:
+            return False
+
     def _market_close_open_position(
         self,
         equity: float,
         event: str,
         message: str,
     ) -> None:
-        """Market-close OPEN position. Records trade via on_position_closed."""
+        """Market-close OPEN position. Records trade via on_position_closed.
+
+        Race-safe: if the market order response is incomplete but the exchange
+        position is already flat, the close is confirmed via trade history
+        instead of raising an error.
+        """
         pos = self._state_machine.position
         if pos is None:
             return
+
+        # ── Pre-flight: already flat on exchange? ──
+        if self._is_position_flat_on_exchange():
+            exit_price = self._resolve_exit_price_from_trades(pos)
+            if exit_price is not None:
+                self._system_log.insert(
+                    level="INFO",
+                    event="market_close_already_flat",
+                    message=f"{message} Position already flat. Exit (from trades): {exit_price:.4f}",
+                )
+                self.on_position_closed(exit_price, equity)
+                return
+            logger.warning("[MARKET_CLOSE] Position flat on exchange but no exit price from trades")
+
+        # ── Cancel protective orders ──
         if self._current_tp_algo_id:
             try:
                 self._execution.cancel_order(self._symbol, self._current_tp_algo_id)
@@ -1054,6 +1104,8 @@ class BFATEngine:
             except Exception:
                 pass
             self._current_stop_order_id = None
+
+        # ── Place close market order ──
         close_side = Side.SHORT if pos.side == Side.LONG else Side.LONG
         resp = self._execution.place_market_order(
             self._symbol,
@@ -1062,14 +1114,41 @@ class BFATEngine:
             _generate_client_order_id("bfat_market_close"),
         )
         resp = _validate_response_dict(resp)
-        _validate_market_response(resp)
-        exit_price, _ = _parse_fill(resp)
-        self._system_log.insert(
-            level="INFO",
-            event=event,
-            message=f"{message} Exit: {exit_price:.4f}",
+
+        # ── Try standard fill parsing first ──
+        try:
+            _validate_market_response(resp)
+            exit_price, _ = _parse_fill(resp)
+            self._system_log.insert(
+                level="INFO",
+                event=event,
+                message=f"{message} Exit: {exit_price:.4f}",
+            )
+            self.on_position_closed(exit_price, equity)
+            return
+        except RuntimeError as primary_err:
+            logger.warning("[MARKET_CLOSE_RESPONSE_INCOMPLETE] %s — confirming via exchange", primary_err)
+
+        # ── Fallback: confirm close via exchange position query ──
+        time.sleep(0.3)
+        if self._is_position_flat_on_exchange():
+            exit_price = self._resolve_exit_price_from_trades(pos)
+            if exit_price is None:
+                current = self._execution.get_ticker_price(self._symbol)
+                exit_price = current if current > 0 else pos.entry_price
+                logger.warning("[MARKET_CLOSE_EXIT_PRICE_ESTIMATED] using ticker/entry as fallback: %.4f", exit_price)
+            self._system_log.insert(
+                level="INFO",
+                event="market_close_confirmed_after_sync",
+                message=f"{message} Confirmed flat after sync. Exit: {exit_price:.4f}",
+            )
+            self.on_position_closed(exit_price, equity)
+            return
+
+        # ── Genuine failure: position still open ──
+        raise RuntimeError(
+            f"Market close response incomplete and position still open: {primary_err}"
         )
-        self.on_position_closed(exit_price, equity)
 
     def on_position_closed(
         self,
