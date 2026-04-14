@@ -101,6 +101,37 @@ class StateMachine:
             take_profit=self._position.take_profit,
         )
 
+    def on_take_profit_update(self, new_take_profit: Optional[float]) -> None:
+        """OPEN -> OPEN. Update take_profit only. Creates new Position instance."""
+        if self._state != PositionState.OPEN:
+            raise ValueError(
+                f"Cannot update take_profit in {self._state.value}, must be OPEN"
+            )
+        if self._position is None:
+            raise ValueError("No active position to update")
+        self._position = Position(
+            symbol=self._position.symbol,
+            side=self._position.side,
+            size=self._position.size,
+            entry_price=self._position.entry_price,
+            stop_price=self._position.stop_price,
+            initial_stop_price=self._position.initial_stop_price,
+            stop_phase=self._position.stop_phase,
+            entry_time=self._position.entry_time,
+            correlation_id=self._position.correlation_id,
+            take_profit=new_take_profit,
+        )
+
+    def replace_position(self, position: Position) -> None:
+        """OPEN -> OPEN. Replace entire position object. Used by sync/recovery paths."""
+        if self._state != PositionState.OPEN:
+            raise ValueError(
+                f"Cannot replace position in {self._state.value}, must be OPEN"
+            )
+        if self._position is None:
+            raise ValueError("No active position to replace")
+        self._position = position
+
     def on_exit_requested(self) -> None:
         """OPEN → CLOSING. Cannot exit unless OPEN."""
         if self._state != PositionState.OPEN:

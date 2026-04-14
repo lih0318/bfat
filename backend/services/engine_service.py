@@ -254,6 +254,8 @@ class EngineService:
                 "take_profit": live_tp_f if live_tp_f and live_tp_f > 0 else None,
                 "tp_protection_mode": "none",
                 "tp_verified": None,
+                "tp_status": "none",
+                "tp_error": None,
                 "sl_protection_mode": "none",
                 "sl_verified": None,
                 "r_multiple": None,
@@ -311,11 +313,17 @@ class EngineService:
             else getattr(self._engine, "_current_take_profit", None)
         )
         tp_algo_id = getattr(self._engine, "_current_tp_algo_id", None)
+        tp_status_raw = getattr(self._engine, "_tp_status", "none")
+        tp_last_error = getattr(self._engine, "_tp_last_error", None)
         if take_profit is not None and float(take_profit) > 0:
             tp_protection_mode = "exchange" if tp_algo_id else "fallback"
         else:
             tp_protection_mode = "none"
-        tp_verified = tp_algo_id is not None if tp_protection_mode == "exchange" else None
+        if tp_status_raw == "failed":
+            tp_protection_mode = "failed"
+        elif tp_status_raw == "repriced" and tp_algo_id:
+            tp_protection_mode = "repriced"
+        tp_verified = tp_algo_id is not None if tp_protection_mode in ("exchange", "repriced") else None
         sl_order_id = getattr(self._engine, "_current_stop_order_id", None)
         sl_verified_flag = getattr(self._engine, "_sl_verified", False)
         if pos is not None and sl_order_id:
@@ -355,6 +363,8 @@ class EngineService:
             "take_profit": take_profit,
             "tp_protection_mode": tp_protection_mode,
             "tp_verified": tp_verified,
+            "tp_status": tp_status_raw,
+            "tp_error": tp_last_error,
             "sl_protection_mode": sl_protection_mode,
             "sl_verified": sl_verified,
             "r_multiple": r_multiple,
@@ -554,8 +564,21 @@ class EngineService:
                             new_id = str(re_resp.get("orderId", ""))
                             if new_id and exec_client.verify_algo_order_active(symbol, new_id):
                                 self._engine._current_stop_order_id = new_id
-                                position.stop_price = re_stop
                                 self._engine._sl_verified = True
+                                if re_stop != position.stop_price:
+                                    new_pos = Position(
+                                        symbol=position.symbol,
+                                        side=position.side,
+                                        size=position.size,
+                                        entry_price=position.entry_price,
+                                        stop_price=re_stop,
+                                        initial_stop_price=position.initial_stop_price,
+                                        stop_phase=position.stop_phase,
+                                        entry_time=position.entry_time,
+                                        correlation_id=position.correlation_id,
+                                        take_profit=position.take_profit,
+                                    )
+                                    sm.replace_position(new_pos)
                                 logger.info("Re-registered and verified SL: %s @ %.2f", new_id, re_stop)
                             else:
                                 logger.error("Re-registered SL %s still not verified", new_id)
@@ -622,13 +645,13 @@ class EngineService:
         except Exception as e:
             logger.warning("Binance position sync failed: %s", e)
 
-    _TP_ATR_MULTIPLIER = 2.4
-    _SL_ATR_MULTIPLIER = 1.2
+    _TP_ATR_MULTIPLIER = 2.8
+    _SL_ATR_MULTIPLIER = 1.6
 
     def _recover_tp_from_atr(
         self, candles: list[dict], position: Position, exec_client: BinanceExecutionClient,
     ) -> None:
-        """Calculate and place a missing TP order using ATR for any regime."""
+        """Calculate and place a missing TP order using ATR, with price-aware repricing."""
         if len(candles) < 15:
             return
         tr_list = [0.0]
@@ -638,13 +661,42 @@ class EngineService:
         atr_val = sum(tr_list[-14:]) / 14
         if atr_val <= 0:
             return
+
         if position.side == Side.LONG:
             tp_price = position.entry_price + self._TP_ATR_MULTIPLIER * atr_val
         else:
             tp_price = position.entry_price - self._TP_ATR_MULTIPLIER * atr_val
-        tp_price = round(tp_price, 2)
+        tp_price = exec_client.format_price(
+            position.symbol, tp_price, ceil=(position.side == Side.LONG),
+        )
         if tp_price <= 0:
             return
+
+        current_price = exec_client.get_ticker_price(position.symbol)
+        if current_price <= 0:
+            current_price = candles[-1]["close"]
+
+        from app.core.engine.engine import (
+            _reprice_tp_outside_market,
+            _validate_take_profit_price,
+        )
+
+        repriced = False
+        if not _validate_take_profit_price(position.side, tp_price, position.entry_price, current_price):
+            filters = exec_client._get_filters(position.symbol)
+            tick_size = filters.get("price_step", 0.1)
+            tp_price = _reprice_tp_outside_market(
+                position.side, position.entry_price, current_price,
+                atr_val, tick_size, self._TP_ATR_MULTIPLIER,
+            )
+            tp_price = exec_client.format_price(
+                position.symbol, tp_price, ceil=(position.side == Side.LONG),
+            )
+            repriced = True
+            logger.warning(
+                "[TP_SYNC_REPRICED] market=%.4f → repriced tp=%.4f", current_price, tp_price,
+            )
+
         try:
             tp_id = _generate_client_order_id("bfat_restore_tp")
             tp_resp = exec_client.place_take_profit_market_order(
@@ -653,13 +705,21 @@ class EngineService:
             algo_id = str(tp_resp.get("orderId", ""))
             if algo_id:
                 self._engine._current_tp_algo_id = algo_id
-                position.take_profit = tp_price
                 self._engine._current_take_profit = tp_price
+                self._engine._tp_status = "repriced" if repriced else "exchange"
+                self._engine._tp_last_error = None
+                sm = self._engine._state_machine
+                try:
+                    sm.on_take_profit_update(tp_price)
+                except ValueError:
+                    pass
                 logger.info(
-                    "TP recovered for restored position: %s @ %.2f (ATR×%.1f)",
-                    algo_id, tp_price, self._TP_ATR_MULTIPLIER,
+                    "TP recovered for restored position: %s @ %.2f (ATR×%.1f, repriced=%s)",
+                    algo_id, tp_price, self._TP_ATR_MULTIPLIER, repriced,
                 )
         except Exception as e:
+            self._engine._tp_status = "failed"
+            self._engine._tp_last_error = str(e)
             logger.warning("TP recovery during sync failed (non-fatal): %s", e)
 
     async def _run(self) -> None:

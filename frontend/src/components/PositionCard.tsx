@@ -15,8 +15,9 @@ interface PositionCardProps {
   position: PositionData | null
   currentStopPrice: number | null
   takeProfit: number | null
-  tpProtectionMode?: 'exchange' | 'fallback' | 'none'
+  tpProtectionMode?: 'exchange' | 'fallback' | 'none' | 'failed' | 'repriced'
   slProtectionMode?: 'exchange' | 'recovering' | 'none'
+  tpError?: string | null
   rMultiple: number | null
 }
 
@@ -25,7 +26,7 @@ function fmt(v: number | null | undefined, digits = 2): string {
   return v.toFixed(digits)
 }
 
-export function PositionCard({ position, currentStopPrice, takeProfit, tpProtectionMode = 'none', slProtectionMode = 'none', rMultiple }: PositionCardProps) {
+export function PositionCard({ position, currentStopPrice, takeProfit, tpProtectionMode = 'none', slProtectionMode = 'none', tpError, rMultiple }: PositionCardProps) {
   if (!position) {
     return (
       <div className="card p-5">
@@ -134,9 +135,19 @@ export function PositionCard({ position, currentStopPrice, takeProfit, tpProtect
                 Exchange ✓
               </span>
             )}
+            {tpProtectionMode === 'repriced' && (
+              <span className="rounded-md bg-[var(--accent-muted)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--accent)]">
+                Repriced ✓
+              </span>
+            )}
             {tpProtectionMode === 'fallback' && (
               <span className="rounded-md bg-[var(--warning-muted)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--warning)]">
                 Fallback
+              </span>
+            )}
+            {tpProtectionMode === 'failed' && (
+              <span className="rounded-md bg-[var(--negative)]/15 px-1.5 py-0.5 text-[10px] font-medium text-[var(--negative)]">
+                등록 실패
               </span>
             )}
             {tpProtectionMode === 'none' && tp == null && (
@@ -149,6 +160,11 @@ export function PositionCard({ position, currentStopPrice, takeProfit, tpProtect
             <p className="mt-1.5 text-lg font-bold tabular-nums text-[var(--positive)]">{fmt(tp)}</p>
           ) : (
             <p className="mt-1.5 text-sm font-medium text-[var(--warning)]">TP 미설정</p>
+          )}
+          {tpProtectionMode === 'failed' && tpError && (
+            <p className="mt-1 text-[10px] text-[var(--negative)]/70 line-clamp-2" title={tpError}>
+              {tpError}
+            </p>
           )}
         </div>
       </div>

@@ -114,7 +114,7 @@ def _close_position_flatten(
 
 
 ATR_PERIOD = 14
-INITIAL_STOP_ATR = 1.2
+INITIAL_STOP_ATR = 1.6
 
 
 def _atr(candles: list[dict], period: int = 14) -> float:
@@ -162,6 +162,44 @@ def _validate_stop_price(
     return actual_entry_price * (1 + FALLBACK_STOP_PCT)
 
 
+_TP_BUFFER_TICKS = 5  # minimum tick-size buffer between market price and TP
+
+
+def _validate_take_profit_price(
+    side: Side,
+    candidate_tp: float,
+    actual_entry_price: float,
+    current_market_price: float,
+) -> bool:
+    """Return True if candidate TP is on the correct side of BOTH entry and market."""
+    if side == Side.LONG:
+        return candidate_tp > actual_entry_price and candidate_tp > current_market_price
+    return candidate_tp < actual_entry_price and candidate_tp < current_market_price
+
+
+def _reprice_tp_outside_market(
+    side: Side,
+    actual_entry_price: float,
+    current_market_price: float,
+    atr_val: float,
+    tick_size: float,
+    tp_atr_mult: float = 2.8,
+) -> float:
+    """Compute a TP safely outside the current market price.
+
+    Uses the farther of (entry-based ATR TP) and (market + buffer) so the
+    resulting trigger never causes an immediate-trigger rejection.
+    """
+    buffer = max(tick_size * _TP_BUFFER_TICKS, atr_val * 0.3) if atr_val > 0 else tick_size * _TP_BUFFER_TICKS
+    if side == Side.LONG:
+        atr_tp = actual_entry_price + tp_atr_mult * atr_val if atr_val > 0 else 0
+        market_tp = current_market_price + buffer
+        return max(atr_tp, market_tp) if atr_tp > 0 else market_tp
+    atr_tp = actual_entry_price - tp_atr_mult * atr_val if atr_val > 0 else 0
+    market_tp = current_market_price - buffer
+    return min(atr_tp, market_tp) if atr_tp > 0 else market_tp
+
+
 def _ts() -> str:
     """ISO timestamp."""
     return datetime.utcnow().isoformat(timespec="seconds") + "Z"
@@ -200,6 +238,8 @@ class BFATEngine:
         self._sl_verified: bool = False
         self._current_tp_algo_id: str | None = None
         self._current_take_profit: float | None = None
+        self._tp_status: str = "none"  # none | exchange | fallback | failed | repriced
+        self._tp_last_error: str | None = None
         self._last_signal_candle_ts: str = ""
         self._last_intrabar_entry_bucket_ts: str = ""
         self._last_close_candle_ts: str = ""
@@ -247,7 +287,11 @@ class BFATEngine:
             )
             self._current_stop_order_id = sl_id
             self._sl_verified = True
-            pos.stop_price = final_stop
+            if final_stop != pos.stop_price:
+                try:
+                    self._state_machine.on_stop_update(pos.stop_phase, final_stop)
+                except ValueError:
+                    pass
             logger.info("[SL_RECOVERED] id=%s stop=%.4f", sl_id, final_stop)
             self._system_log.insert(
                 level="INFO", event="sl_recovered",
@@ -354,6 +398,56 @@ class BFATEngine:
             logger.warning("[TP_ATTEMPT_2_FAILED] tp=%.4f err=%s", take_profit, e)
 
         raise RuntimeError(f"TP placement failed after 2 attempts (tp={take_profit})")
+
+    def _validate_and_place_tp(
+        self,
+        side: Side,
+        actual_size: float,
+        candidate_tp: float,
+        actual_entry_price: float,
+        atr_val: float,
+    ) -> tuple[str | None, float]:
+        """Validate TP price against current market, reprice if needed, then place.
+
+        Returns (algo_id_or_None, final_tp_price). Updates _tp_status/_tp_last_error.
+        """
+        current_price = self._execution.get_ticker_price(self._symbol)
+        if current_price <= 0:
+            current_price = actual_entry_price
+
+        tp_price = candidate_tp
+        repriced = False
+        if not _validate_take_profit_price(side, tp_price, actual_entry_price, current_price):
+            filters = self._execution._get_filters(self._symbol)
+            tick_size = filters.get("price_step", 0.1)
+            tp_price = _reprice_tp_outside_market(
+                side, actual_entry_price, current_price, atr_val, tick_size,
+            )
+            tp_price = self._execution.format_price(
+                self._symbol, tp_price, ceil=(side == Side.LONG),
+            )
+            repriced = True
+            logger.warning(
+                "[TP_REPRICED] original=%.4f → repriced=%.4f market=%.4f",
+                candidate_tp, tp_price, current_price,
+            )
+
+        try:
+            algo_id = self._place_tp_with_retry(side, actual_size, tp_price)
+            self._tp_status = "repriced" if repriced else "exchange"
+            self._tp_last_error = None
+            logger.info("[TP_ORDER_PLACED] id=%s tp=%.4f repriced=%s", algo_id, tp_price, repriced)
+            return algo_id, tp_price
+        except Exception as e:
+            self._tp_status = "failed"
+            self._tp_last_error = str(e)
+            logger.warning("[TP_REGISTRATION_FAILED] err=%s; fallback TP active", e)
+            self._system_log.insert(
+                level="WARNING",
+                event="tp_registration_failed",
+                message=f"TP failed: {e}. Fallback TP active. tp={tp_price}",
+            )
+            return None, tp_price
 
     def _check_realtime_tp(self, live_bar: dict, equity: float) -> None:
         """Check TP in real-time for OPEN positions without exchange TP algo."""
@@ -498,19 +592,15 @@ class BFATEngine:
                 raise RuntimeError("Stop failed after intrabar entry; flattened") from e
 
             tp_algo_id: str | None = None
+            final_tp = signal.take_profit
             if signal.take_profit is not None and float(signal.take_profit) > 0:
-                try:
-                    tp_algo_id = self._place_tp_with_retry(
-                        signal.side, actual_size, float(signal.take_profit),
-                    )
-                    logger.info("[TP_ORDER_PLACED] id=%s tp=%.4f", tp_algo_id, signal.take_profit)
-                except Exception as e:
-                    logger.warning("[TP_REGISTRATION_FAILED] err=%s; fallback TP active", e)
-                    self._system_log.insert(
-                        level="WARNING",
-                        event="tp_registration_failed",
-                        message=f"TP failed: {e}. Fallback TP active. tp={signal.take_profit}",
-                    )
+                tp_algo_id, final_tp = self._validate_and_place_tp(
+                    signal.side, actual_size, float(signal.take_profit),
+                    actual_entry_price, atr_val,
+                )
+            else:
+                self._tp_status = "none"
+                self._tp_last_error = None
 
             position = Position(
                 symbol=self._symbol,
@@ -522,7 +612,7 @@ class BFATEngine:
                 stop_phase=StopPhase.INITIAL,
                 entry_time=_ts(),
                 correlation_id=entry_id,
-                take_profit=signal.take_profit,
+                take_profit=final_tp,
             )
             try:
                 self._state_machine.on_entry_filled(position)
@@ -540,7 +630,7 @@ class BFATEngine:
             self._current_tp_algo_id = tp_algo_id
             self._last_signal_candle_ts = bucket_ts
             self._last_intrabar_entry_bucket_ts = bucket_ts
-            self._current_take_profit = signal.take_profit
+            self._current_take_profit = final_tp
             if self._notifier:
                 self._notifier.notify_entry(position)
             try:
@@ -755,19 +845,15 @@ class BFATEngine:
                         "Stop order failed after entry filled; position flattened"
                     ) from e
                 tp_algo_id: str | None = None
+                final_tp = signal.take_profit
                 if signal.take_profit is not None and float(signal.take_profit) > 0:
-                    try:
-                        tp_algo_id = self._place_tp_with_retry(
-                            signal.side, actual_size, float(signal.take_profit),
-                        )
-                        logger.info("[TP_ORDER_PLACED] id=%s tp=%.4f", tp_algo_id, signal.take_profit)
-                    except Exception as e:
-                        logger.warning("[TP_REGISTRATION_FAILED] err=%s; fallback TP active", e)
-                        self._system_log.insert(
-                            level="WARNING",
-                            event="tp_registration_failed",
-                            message=f"TP failed: {e}. Fallback TP active. tp={signal.take_profit}",
-                        )
+                    tp_algo_id, final_tp = self._validate_and_place_tp(
+                        signal.side, actual_size, float(signal.take_profit),
+                        actual_entry_price, atr_val,
+                    )
+                else:
+                    self._tp_status = "none"
+                    self._tp_last_error = None
                 position = Position(
                     symbol=self._symbol,
                     side=signal.side,
@@ -778,7 +864,7 @@ class BFATEngine:
                     stop_phase=StopPhase.INITIAL,
                     entry_time=_ts(),
                     correlation_id=entry_id,
-                    take_profit=signal.take_profit,
+                    take_profit=final_tp,
                 )
                 try:
                     self._state_machine.on_entry_filled(position)
@@ -803,7 +889,7 @@ class BFATEngine:
                     ) from e
                 self._current_tp_algo_id = tp_algo_id
                 self._last_signal_candle_ts = signal.signal_candle_ts
-                self._current_take_profit = signal.take_profit
+                self._current_take_profit = final_tp
                 if self._notifier:
                     self._notifier.notify_entry(position)
                 try:
@@ -859,7 +945,11 @@ class BFATEngine:
                     )
                     self._current_stop_order_id = sl_id
                     self._sl_verified = True
-                    pos.stop_price = new_stop
+                    if new_stop != pos.stop_price:
+                        try:
+                            self._state_machine.on_stop_update(pos.stop_phase, new_stop)
+                        except ValueError:
+                            pass
                     logger.info("[SL_EMERGENCY_PLACED] id=%s stop=%.4f", sl_id, new_stop)
                 except Exception as e:
                     logger.error("[SL_EMERGENCY_FAILED] err=%s; flattening", e)
@@ -868,17 +958,20 @@ class BFATEngine:
                     )
                     return
 
-            # -- Deferred TP health check (Ranging: TP should exist but algo_id missing) --
+            # -- Deferred TP health check (TP should exist but algo_id missing) --
             tp = pos.take_profit
             if tp is not None and float(tp) > 0 and not self._current_tp_algo_id:
                 logger.warning("[TP_MISSING_ON_EXCHANGE] attempting re-registration tp=%.4f", float(tp))
-                try:
-                    self._current_tp_algo_id = self._place_tp_with_retry(
-                        pos.side, pos.size, float(tp),
-                    )
-                    logger.info("[TP_RE_REGISTERED] id=%s", self._current_tp_algo_id)
-                except Exception:
-                    logger.warning("[TP_RE_REGISTRATION_FAILED] fallback TP remains active")
+                algo_id, final_tp = self._validate_and_place_tp(
+                    pos.side, pos.size, float(tp), pos.entry_price, atr_val,
+                )
+                self._current_tp_algo_id = algo_id
+                if final_tp != tp:
+                    try:
+                        self._state_machine.on_take_profit_update(final_tp)
+                    except ValueError:
+                        pass
+                    self._current_take_profit = final_tp
 
             # -- TP recovery: calculate and place TP if missing --
             if pos.take_profit is None and atr_val > 0:
@@ -891,7 +984,7 @@ class BFATEngine:
                     if range_mid is not None and range_mid > 0:
                         tp_price = range_mid
                 elif active_regime == "TRENDING":
-                    _TP_ATR_MULT = 2.4
+                    _TP_ATR_MULT = 2.8
                     if pos.side == Side.LONG:
                         tp_price = pos.entry_price + _TP_ATR_MULT * atr_val
                     else:
@@ -901,18 +994,17 @@ class BFATEngine:
                     tp_price = self._execution.format_price(
                         self._symbol, tp_price, ceil=(pos.side == Side.LONG),
                     )
-                    pos.take_profit = tp_price
-                    self._current_take_profit = tp_price
-                    logger.info("[TP_RECOVERED] regime=%s tp=%.4f", active_regime, tp_price)
+                    algo_id, final_tp = self._validate_and_place_tp(
+                        pos.side, pos.size, tp_price, pos.entry_price, atr_val,
+                    )
+                    self._current_tp_algo_id = algo_id
+                    self._current_take_profit = final_tp
                     try:
-                        self._current_tp_algo_id = self._place_tp_with_retry(
-                            pos.side, pos.size, tp_price,
-                        )
-                        logger.info("[TP_RECOVERED_PLACED] id=%s tp=%.4f",
-                                    self._current_tp_algo_id, tp_price)
-                    except Exception as e:
-                        logger.warning("[TP_RECOVERY_PLACE_FAILED] err=%s; "
-                                       "fallback TP active", e)
+                        self._state_machine.on_take_profit_update(final_tp)
+                    except ValueError:
+                        pass
+                    logger.info("[TP_RECOVERED] regime=%s tp=%.4f algo=%s",
+                                active_regime, final_tp, algo_id)
 
             # -- Logical candle-close TP fallback (TP set but no exchange algo) --
             if tp is not None and not self._current_tp_algo_id:
@@ -1128,5 +1220,7 @@ class BFATEngine:
         self._sl_verified = False
         self._current_tp_algo_id = None
         self._current_take_profit = None
+        self._tp_status = "none"
+        self._tp_last_error = None
         self._entry_insight_snapshot = None
         self._check_state_consistency()

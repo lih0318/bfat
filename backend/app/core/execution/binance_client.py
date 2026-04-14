@@ -472,3 +472,17 @@ class BinanceExecutionClient:
         """GET /fapi/v1/userTrades. Returns list of trade dicts (most recent first)."""
         data = self._request("GET", "/fapi/v1/userTrades", {"symbol": symbol, "limit": limit})
         return data if isinstance(data, list) else []
+
+    def get_ticker_price(self, symbol: str) -> float:
+        """GET /fapi/v1/ticker/price — current contract price for symbol."""
+        try:
+            url = f"{self._base_url}/fapi/v1/ticker/price"
+            resp = requests.get(url, params={"symbol": symbol}, timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                price = float(data.get("price", 0))
+                if price > 0:
+                    return price
+        except Exception as e:
+            logger.warning("Ticker price fetch failed for %s: %s", symbol, e)
+        return 0.0

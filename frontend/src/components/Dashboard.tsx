@@ -14,8 +14,10 @@ interface StatusData {
   last_signal: Record<string, string> | null
   current_stop_price: number | null
   take_profit: number | null
-  tp_protection_mode: 'exchange' | 'fallback' | 'none'
+  tp_protection_mode: 'exchange' | 'fallback' | 'none' | 'failed' | 'repriced'
   tp_verified: boolean | null
+  tp_status: string | null
+  tp_error: string | null
   sl_protection_mode: 'exchange' | 'recovering' | 'none'
   sl_verified: boolean | null
   r_multiple: number | null
@@ -356,6 +358,7 @@ export function Dashboard() {
                   takeProfit={status?.take_profit ?? null}
                   tpProtectionMode={status?.tp_protection_mode ?? 'none'}
                   slProtectionMode={status?.sl_protection_mode ?? 'none'}
+                  tpError={status?.tp_error ?? null}
                   rMultiple={rMultiple}
                 />
               </div>

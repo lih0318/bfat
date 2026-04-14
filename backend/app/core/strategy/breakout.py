@@ -75,8 +75,8 @@ class BreakoutStrategy:
     OVEREXTENSION_LOOKBACK = 10
     ATR_PERIOD = 14
     ATR_OVEREXTENSION = 2.5
-    SL_ATR_MULTIPLIER = 1.2
-    TP_ATR_MULTIPLIER = 2.4  # R:R = 1:2
+    SL_ATR_MULTIPLIER = 1.6
+    TP_ATR_MULTIPLIER = 2.8  # R:R ≈ 1:1.75 (balanced for BTC 15m volatility)
 
     def __init__(self, symbol: str = "BTCUSDT") -> None:
         self._symbol = symbol
