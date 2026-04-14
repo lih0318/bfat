@@ -3,6 +3,7 @@
 from datetime import datetime, timedelta
 from typing import Optional
 
+import bcrypt
 from jwt import PyJWTError, decode as jwt_decode, encode as jwt_encode
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, OAuth2PasswordBearer
@@ -43,12 +44,12 @@ def decode_token(token: str, secret: str) -> Optional[dict]:
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    from passlib.context import CryptContext
-    ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
-    return ctx.verify(plain, hashed)
+    # passlib로 생성한 $2b$... 해시와 동일하게 검증됨
+    try:
+        return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
+    except (ValueError, TypeError):
+        return False
 
 
 def hash_password(password: str) -> str:
-    from passlib.context import CryptContext
-    ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
-    return ctx.hash(password)
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")

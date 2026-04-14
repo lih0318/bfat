@@ -9,6 +9,7 @@ requests>=2.31.0
 websockets>=12.0
 # JWT: use PyJWT only. Do NOT install the deprecated 'jwt' package (pip uninstall jwt).
 PyJWT>=2.8.0
-passlib[bcrypt]>=1.7.4
+# passlib는 bcrypt 5.x와 호환 문제가 있어 제거. 직접 bcrypt 사용.
+bcrypt>=4.0.1,<5
 python-multipart>=0.0.9
 httpx>=0.27.0
