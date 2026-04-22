@@ -27,6 +27,7 @@ interface StatusData {
   unrealized_pnl: number | null
   total_realized_pnl: number | null
   kill_switch_triggered: boolean
+  post_close_cooldown: number
   error: string | null
 }
 
@@ -219,6 +220,12 @@ export function Dashboard() {
               )
             })()}
 
+            {status?.post_close_cooldown != null && status.post_close_cooldown > 0 && (
+              <span className="badge bg-[var(--accent-muted)] text-[var(--accent)]">
+                COOLDOWN {status.post_close_cooldown}
+              </span>
+            )}
+
             {status?.system_health === 'DEGRADED' && (
               <span className="badge bg-[var(--warning-muted)] text-[var(--warning)]">DEGRADED</span>
             )}
@@ -302,6 +309,15 @@ export function Dashboard() {
       <main className="mx-auto max-w-7xl flex-1 p-4 md:p-6">
         {activeTab === 'dashboard' && (
           <div className="animate-fade-in space-y-5">
+            {status?.error && (
+              <div className="rounded-xl border border-[var(--negative)]/30 bg-[var(--negative-muted)] p-4">
+                <div className="flex items-center gap-2">
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[var(--negative)]/20 text-xs font-bold text-[var(--negative)]">!</span>
+                  <p className="text-sm font-semibold text-[var(--negative)]">Critical Error</p>
+                </div>
+                <p className="mt-1.5 text-sm text-[var(--negative)]/80">{status.error}</p>
+              </div>
+            )}
             <ControlPanel
               engineState={engineState}
               startLoading={startLoading}

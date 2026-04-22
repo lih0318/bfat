@@ -247,8 +247,10 @@ class BFATEngine:
         self._pending_fallback_close: bool = False
         self._entry_insight_snapshot: dict | None = None
         self._last_sl_recover_ts: float = 0.0
+        self._post_close_cooldown_remaining: int = 0
 
     _SL_RECOVER_COOLDOWN = 30.0
+    POST_CLOSE_COOLDOWN_CANDLES = 3
 
     def _check_state_consistency(self) -> None:
         """Raise if engine state is inconsistent."""
@@ -316,12 +318,15 @@ class BFATEngine:
         stop_price: float,
         actual_entry_price: float,
         atr_val: float,
+        *,
+        verify: bool = True,
     ) -> tuple[str, float]:
         """Place SL with one retry using a fallback price. Returns (orderId, final_stop_price).
 
         Attempt 1: the validated stop_price.
         Attempt 2: a percentage-based fallback derived from actual_entry_price.
-        Raises RuntimeError only if both attempts fail.
+        When verify=True, confirms the order is live on exchange via backoff query.
+        Raises RuntimeError only if both attempts fail or verification fails.
         """
         stop_id = _generate_client_order_id("bfat_stop")
         try:
@@ -330,11 +335,14 @@ class BFATEngine:
             )
             if stop_resp and "orderId" in stop_resp:
                 order_id = _validate_stop_response(stop_resp)
-                logger.info(
-                    "[STOP_ORDER_PLACED]",
-                    extra={"orderId": order_id, "stopPrice": stop_price},
-                )
+                if verify:
+                    if not self._execution.verify_algo_order_with_backoff(self._symbol, order_id):
+                        logger.warning("[SL_PLACED_BUT_NOT_VERIFIED] id=%s price=%.4f", order_id, stop_price)
+                        raise RuntimeError(f"SL placed (id={order_id}) but not confirmed on exchange")
+                logger.info("[STOP_ORDER_PLACED] id=%s price=%.4f verified=%s", order_id, stop_price, verify)
                 return order_id, stop_price
+        except RuntimeError:
+            raise
         except Exception as e:
             logger.warning("[STOP_ATTEMPT_1_FAILED] price=%.4f err=%s", stop_price, e)
 
@@ -358,15 +366,14 @@ class BFATEngine:
             )
             if stop_resp and "orderId" in stop_resp:
                 order_id = _validate_stop_response(stop_resp)
-                logger.info(
-                    "[STOP_ORDER_PLACED_RETRY]",
-                    extra={
-                        "orderId": order_id,
-                        "stopPrice": fallback_stop,
-                        "originalStop": stop_price,
-                    },
-                )
+                if verify:
+                    if not self._execution.verify_algo_order_with_backoff(self._symbol, order_id):
+                        logger.warning("[SL_RETRY_PLACED_BUT_NOT_VERIFIED] id=%s price=%.4f", order_id, fallback_stop)
+                        raise RuntimeError(f"SL retry placed (id={order_id}) but not confirmed on exchange")
+                logger.info("[STOP_ORDER_PLACED_RETRY] id=%s price=%.4f verified=%s", order_id, fallback_stop, verify)
                 return order_id, fallback_stop
+        except RuntimeError:
+            raise
         except Exception as e:
             logger.warning("[STOP_ATTEMPT_2_FAILED] price=%.4f err=%s", fallback_stop, e)
 
@@ -375,15 +382,24 @@ class BFATEngine:
             f"(original={stop_price}, fallback={fallback_stop})"
         )
 
-    def _place_tp_with_retry(self, side: Side, actual_size: float, take_profit: float) -> str:
-        """Place TP with one retry. Returns orderId. Raises RuntimeError if both fail."""
+    def _place_tp_with_retry(
+        self, side: Side, actual_size: float, take_profit: float, *, verify: bool = True,
+    ) -> str:
+        """Place TP with one retry. Returns orderId. Raises RuntimeError if both fail or verification fails."""
         tp_id = _generate_client_order_id("bfat_tp")
         try:
             resp = self._execution.place_take_profit_market_order(
                 self._symbol, side, actual_size, take_profit, tp_id,
             )
             if resp and "orderId" in resp:
-                return _validate_stop_response(resp)
+                order_id = _validate_stop_response(resp)
+                if verify:
+                    if not self._execution.verify_algo_order_with_backoff(self._symbol, order_id):
+                        logger.warning("[TP_PLACED_BUT_NOT_VERIFIED] id=%s tp=%.4f", order_id, take_profit)
+                        raise RuntimeError(f"TP placed (id={order_id}) but not confirmed on exchange")
+                return order_id
+        except RuntimeError:
+            raise
         except Exception as e:
             logger.warning("[TP_ATTEMPT_1_FAILED] tp=%.4f err=%s", take_profit, e)
 
@@ -393,7 +409,14 @@ class BFATEngine:
                 self._symbol, side, actual_size, take_profit, retry_id,
             )
             if resp and "orderId" in resp:
-                return _validate_stop_response(resp)
+                order_id = _validate_stop_response(resp)
+                if verify:
+                    if not self._execution.verify_algo_order_with_backoff(self._symbol, order_id):
+                        logger.warning("[TP_RETRY_PLACED_BUT_NOT_VERIFIED] id=%s tp=%.4f", order_id, take_profit)
+                        raise RuntimeError(f"TP retry placed (id={order_id}) but not confirmed on exchange")
+                return order_id
+        except RuntimeError:
+            raise
         except Exception as e:
             logger.warning("[TP_ATTEMPT_2_FAILED] tp=%.4f err=%s", take_profit, e)
 
@@ -406,10 +429,14 @@ class BFATEngine:
         candidate_tp: float,
         actual_entry_price: float,
         atr_val: float,
+        *,
+        fail_closed: bool = True,
     ) -> tuple[str | None, float]:
         """Validate TP price against current market, reprice if needed, then place.
 
-        Returns (algo_id_or_None, final_tp_price). Updates _tp_status/_tp_last_error.
+        When fail_closed=True (default for entry), raises on failure instead of
+        returning None. When fail_closed=False (runtime recovery), returns
+        (None, tp_price) on failure so the engine can use fallback TP.
         """
         current_price = self._execution.get_ticker_price(self._symbol)
         if current_price <= 0:
@@ -436,11 +463,19 @@ class BFATEngine:
             algo_id = self._place_tp_with_retry(side, actual_size, tp_price)
             self._tp_status = "repriced" if repriced else "exchange"
             self._tp_last_error = None
-            logger.info("[TP_ORDER_PLACED] id=%s tp=%.4f repriced=%s", algo_id, tp_price, repriced)
+            logger.info("[TP_ORDER_PLACED] id=%s tp=%.4f repriced=%s verified=True", algo_id, tp_price, repriced)
             return algo_id, tp_price
         except Exception as e:
             self._tp_status = "failed"
             self._tp_last_error = str(e)
+            if fail_closed:
+                logger.error("[TP_REGISTRATION_FAILED_CLOSED] err=%s; entry will be aborted", e)
+                self._system_log.insert(
+                    level="ERROR",
+                    event="tp_registration_failed_closed",
+                    message=f"TP failed (fail-closed): {e}. tp={tp_price}",
+                )
+                raise RuntimeError(f"TP registration failed (fail-closed): {e}") from e
             logger.warning("[TP_REGISTRATION_FAILED] err=%s; fallback TP active", e)
             self._system_log.insert(
                 level="WARNING",
@@ -504,6 +539,9 @@ class BFATEngine:
             self._check_realtime_tp(live_bar, equity)
             return
         if self._state_machine.state != PositionState.FLAT:
+            return
+        if self._post_close_cooldown_remaining > 0:
+            self._last_skip_reason = f"post_close_cooldown ({self._post_close_cooldown_remaining} remaining)"
             return
         if self._kill_switch.is_triggered():
             self._last_skip_reason = "kill_switch_triggered"
@@ -594,10 +632,23 @@ class BFATEngine:
             tp_algo_id: str | None = None
             final_tp = signal.take_profit
             if signal.take_profit is not None and float(signal.take_profit) > 0:
-                tp_algo_id, final_tp = self._validate_and_place_tp(
-                    signal.side, actual_size, float(signal.take_profit),
-                    actual_entry_price, atr_val,
-                )
+                try:
+                    tp_algo_id, final_tp = self._validate_and_place_tp(
+                        signal.side, actual_size, float(signal.take_profit),
+                        actual_entry_price, atr_val,
+                        fail_closed=True,
+                    )
+                except Exception as e:
+                    logger.error("[TP_FAIL_CLOSED_INTRABAR] err=%s; cancelling SL and flattening", e)
+                    try:
+                        self._execution.cancel_order(self._symbol, self._current_stop_order_id)
+                    except Exception:
+                        pass
+                    self._current_stop_order_id = None
+                    self._sl_verified = False
+                    _close_position_flatten(self._execution, self._symbol, signal.side, actual_size)
+                    self._state_machine.rollback_entry()
+                    raise RuntimeError("TP failed on intrabar entry (fail-closed); flattened") from e
             else:
                 self._tp_status = "none"
                 self._tp_last_error = None
@@ -622,7 +673,11 @@ class BFATEngine:
                         self._execution.cancel_order(self._symbol, tp_algo_id)
                     except Exception:
                         pass
-                self._execution.cancel_order(self._symbol, self._current_stop_order_id)
+                if self._current_stop_order_id:
+                    try:
+                        self._execution.cancel_order(self._symbol, self._current_stop_order_id)
+                    except Exception:
+                        pass
                 _close_position_flatten(self._execution, self._symbol, signal.side, actual_size)
                 self._state_machine.rollback_entry()
                 raise RuntimeError("State transition failed after intrabar entry; flattened") from e
@@ -741,6 +796,14 @@ class BFATEngine:
 
         # ── FLAT → entry if Signal ──
         if self._state_machine.state == PositionState.FLAT:
+            if self._post_close_cooldown_remaining > 0:
+                self._post_close_cooldown_remaining -= 1
+                self._last_skip_reason = f"post_close_cooldown ({self._post_close_cooldown_remaining} remaining)"
+                logger.info(
+                    "[POST_CLOSE_COOLDOWN] %d candle(s) remaining before next entry allowed",
+                    self._post_close_cooldown_remaining,
+                )
+                return
             if not isinstance(result, Signal):
                 se_reason = getattr(self._strategy_engine, "_last_skip_reason", None)
                 self._last_skip_reason = se_reason or "no_signal"
@@ -836,10 +899,25 @@ class BFATEngine:
                 tp_algo_id: str | None = None
                 final_tp = signal.take_profit
                 if signal.take_profit is not None and float(signal.take_profit) > 0:
-                    tp_algo_id, final_tp = self._validate_and_place_tp(
-                        signal.side, actual_size, float(signal.take_profit),
-                        actual_entry_price, atr_val,
-                    )
+                    try:
+                        tp_algo_id, final_tp = self._validate_and_place_tp(
+                            signal.side, actual_size, float(signal.take_profit),
+                            actual_entry_price, atr_val,
+                            fail_closed=True,
+                        )
+                    except Exception as e:
+                        logger.error("[TP_FAIL_CLOSED_ON_ENTRY] err=%s; cancelling SL and flattening", e)
+                        try:
+                            self._execution.cancel_order(self._symbol, self._current_stop_order_id)
+                        except Exception:
+                            pass
+                        self._current_stop_order_id = None
+                        self._sl_verified = False
+                        _close_position_flatten(
+                            self._execution, self._symbol, signal.side, actual_size,
+                        )
+                        self._state_machine.rollback_entry()
+                        raise RuntimeError("TP failed on entry (fail-closed); position flattened") from e
                 else:
                     self._tp_status = "none"
                     self._tp_last_error = None
@@ -863,9 +941,13 @@ class BFATEngine:
                             self._execution.cancel_order(self._symbol, tp_algo_id)
                         except Exception:
                             pass
-                    self._execution.cancel_order(
-                        self._symbol, self._current_stop_order_id
-                    )
+                    if self._current_stop_order_id:
+                        try:
+                            self._execution.cancel_order(
+                                self._symbol, self._current_stop_order_id
+                            )
+                        except Exception:
+                            pass
                     _close_position_flatten(
                         self._execution,
                         self._symbol,
@@ -908,7 +990,14 @@ class BFATEngine:
 
             # -- Deferred SL health check --
             if self._current_stop_order_id:
-                if not self._execution.verify_algo_order_active(self._symbol, self._current_stop_order_id):
+                try:
+                    sl_active = self._execution.verify_algo_order_active(
+                        self._symbol, self._current_stop_order_id,
+                    )
+                except Exception as e:
+                    logger.warning("[SL_VERIFY_API_FAILED] err=%s; assuming still active", e)
+                    sl_active = True
+                if not sl_active:
                     logger.warning("[SL_MISSING_ON_EXCHANGE] attempting re-registration")
                     self._system_log.insert(
                         level="WARNING", event="sl_missing",
@@ -919,13 +1008,17 @@ class BFATEngine:
                             pos.side, pos.size, pos.stop_price, pos.entry_price, atr_val,
                         )
                         self._current_stop_order_id = sl_id
+                        self._sl_verified = True
                         logger.info("[SL_RE_REGISTERED] id=%s", sl_id)
                     except Exception as e:
                         logger.error("[SL_RE_REGISTRATION_FAILED] err=%s; flattening", e)
+                        self._sl_verified = False
                         _close_position_flatten(
                             self._execution, self._symbol, pos.side, pos.size,
                         )
                         return
+                else:
+                    self._sl_verified = True
             else:
                 logger.warning("[SL_ORDER_ID_MISSING] attempting emergency SL placement")
                 try:
@@ -942,6 +1035,7 @@ class BFATEngine:
                     logger.info("[SL_EMERGENCY_PLACED] id=%s stop=%.4f", sl_id, new_stop)
                 except Exception as e:
                     logger.error("[SL_EMERGENCY_FAILED] err=%s; flattening", e)
+                    self._sl_verified = False
                     _close_position_flatten(
                         self._execution, self._symbol, pos.side, pos.size,
                     )
@@ -953,6 +1047,7 @@ class BFATEngine:
                 logger.warning("[TP_MISSING_ON_EXCHANGE] attempting re-registration tp=%.4f", float(tp))
                 algo_id, final_tp = self._validate_and_place_tp(
                     pos.side, pos.size, float(tp), pos.entry_price, atr_val,
+                    fail_closed=False,
                 )
                 self._current_tp_algo_id = algo_id
                 if final_tp != tp:
@@ -985,6 +1080,7 @@ class BFATEngine:
                     )
                     algo_id, final_tp = self._validate_and_place_tp(
                         pos.side, pos.size, tp_price, pos.entry_price, atr_val,
+                        fail_closed=False,
                     )
                     self._current_tp_algo_id = algo_id
                     self._current_take_profit = final_tp
@@ -1302,4 +1398,9 @@ class BFATEngine:
         self._tp_status = "none"
         self._tp_last_error = None
         self._entry_insight_snapshot = None
+        self._post_close_cooldown_remaining = self.POST_CLOSE_COOLDOWN_CANDLES
+        logger.info(
+            "[POST_CLOSE_COOLDOWN] activated: %d candles before next entry",
+            self._post_close_cooldown_remaining,
+        )
         self._check_state_consistency()

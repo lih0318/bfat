@@ -265,6 +265,7 @@ class EngineService:
                 "unrealized_pnl": stopped_unrealized,
                 "total_realized_pnl": None,
                 "kill_switch_triggered": False,
+                "post_close_cooldown": 0,
                 "error": self._critical_error,
             }
         sm = self._engine._state_machine
@@ -305,7 +306,9 @@ class EngineService:
             r_validation_status = t.get("r_validation_status") or None
         kill = self._engine._kill_switch
         system_health = "HEALTHY"
-        if r_validation_status in ("CRITICAL", "CRITICAL_OUTLIER"):
+        if self._critical_error:
+            system_health = "DEGRADED"
+        elif r_validation_status in ("CRITICAL", "CRITICAL_OUTLIER"):
             system_health = "DEGRADED"
         take_profit = (
             pos.take_profit
@@ -351,6 +354,7 @@ class EngineService:
             total_realized_pnl = summary.get("total_net_pnl", 0.0)
         except Exception:
             pass
+        cooldown_remaining = getattr(self._engine, "_post_close_cooldown_remaining", 0)
         return {
             "engine_state": sm.state.value,
             "position": pos_dict,
@@ -374,13 +378,17 @@ class EngineService:
             "unrealized_pnl": unrealized_pnl,
             "total_realized_pnl": total_realized_pnl,
             "kill_switch_triggered": kill.is_triggered(),
+            "post_close_cooldown": cooldown_remaining,
             "error": self._critical_error,
         }
 
     def _sync_binance_position(self) -> None:
         """On engine start, check Binance for an existing open position and restore into StateMachine.
 
-        Also restores TP algo order if found on exchange.
+        FAIL-CLOSED POLICY: if SL cannot be verified on exchange after all
+        recovery attempts, the position is NOT restored. The engine starts
+        FLAT, and the unprotected position remains on Binance for manual
+        intervention (logged as CRITICAL).
         """
         if self._engine is None:
             return
@@ -481,35 +489,92 @@ class EngineService:
                         pass
                     stop_order_id = None
 
+            # ── SL recovery: place + verify with backoff ──
+            sl_verified = False
             if stop_order_id is None:
                 _SAFETY_MARGINS = [0.015, 0.030, 0.050]
                 for margin in _SAFETY_MARGINS:
                     if side == Side.LONG:
-                        stop_price = round(entry_price * (1 - margin), 2)
+                        stop_price = exec_client.format_price(
+                            symbol, entry_price * (1 - margin),
+                        )
                     else:
-                        stop_price = round(entry_price * (1 + margin), 2)
+                        stop_price = exec_client.format_price(
+                            symbol, entry_price * (1 + margin), ceil=True,
+                        )
                     try:
                         stop_resp = exec_client.place_stop_market_order(
                             symbol, side, size, stop_price,
                             _generate_client_order_id("bfat_restore_stop"),
                         )
-                        stop_order_id = str(stop_resp.get("orderId", ""))
-                        logger.info(
-                            "Placed safety stop for restored position: %s @ %.2f (margin=%.1f%%)",
-                            stop_order_id, stop_price, margin * 100,
-                        )
-                        break
+                        new_id = str(stop_resp.get("orderId", ""))
+                        if new_id and exec_client.verify_algo_order_with_backoff(symbol, new_id):
+                            stop_order_id = new_id
+                            sl_verified = True
+                            logger.info(
+                                "Placed and verified safety stop: %s @ %.4f (margin=%.1f%%)",
+                                stop_order_id, stop_price, margin * 100,
+                            )
+                            break
+                        elif new_id:
+                            logger.warning("Safety SL placed (%s) but not verified at margin %.1f%%", new_id, margin * 100)
                     except Exception as e:
-                        logger.warning(
-                            "Safety SL at %.1f%% failed: %s", margin * 100, e,
-                        )
+                        logger.warning("Safety SL at %.1f%% failed: %s", margin * 100, e)
                         continue
-                if stop_order_id is None:
-                    logger.error(
-                        "All SL placement attempts failed for %s %s. "
-                        "Restoring position without SL; recovery will be attempted at runtime.",
-                        side.value, symbol,
-                    )
+            else:
+                try:
+                    sl_verified = exec_client.verify_algo_order_with_backoff(symbol, stop_order_id)
+                except Exception as e:
+                    logger.warning("SL verification failed for existing order %s: %s", stop_order_id, e)
+
+            if not sl_verified and stop_order_id:
+                logger.warning("Existing SL %s not verified; attempting re-registration", stop_order_id)
+                try:
+                    exec_client.cancel_order(symbol, stop_order_id)
+                except Exception:
+                    pass
+                re_stop = exec_client.format_price(
+                    symbol,
+                    entry_price * (1 - 0.015) if side == Side.LONG else entry_price * (1 + 0.015),
+                    ceil=(side == Side.SHORT),
+                )
+                re_id = _generate_client_order_id("bfat_restore_stop2")
+                try:
+                    re_resp = exec_client.place_stop_market_order(symbol, side, size, re_stop, re_id)
+                    new_id = str(re_resp.get("orderId", ""))
+                    if new_id and exec_client.verify_algo_order_with_backoff(symbol, new_id):
+                        stop_order_id = new_id
+                        stop_price = re_stop
+                        sl_verified = True
+                        logger.info("Re-registered and verified SL: %s @ %.4f", new_id, re_stop)
+                    else:
+                        logger.error("Re-registered SL %s still not verified", new_id)
+                except Exception as e2:
+                    logger.error("SL re-registration failed during sync: %s", e2)
+
+            # ── FAIL-CLOSED: refuse to restore position without verified SL ──
+            if not sl_verified:
+                logger.critical(
+                    "FAIL-CLOSED: Cannot verify SL for %s %s %.6f @ %.4f. "
+                    "Position will NOT be restored into engine. "
+                    "Manual intervention required on Binance.",
+                    side.value, symbol, size, entry_price,
+                )
+                _, _, sys_log = create_persistence(self._db)
+                sys_log.insert(
+                    level="CRITICAL",
+                    event="sync_fail_closed_no_sl",
+                    message=(
+                        f"Engine start: position {side.value} {symbol} {size} @ {entry_price} "
+                        f"found on Binance but SL could not be verified. "
+                        f"Position NOT restored. Manual intervention required."
+                    ),
+                )
+                self._critical_error = (
+                    f"Position found on Binance but SL could not be secured. "
+                    f"Engine started FLAT. Check Binance manually."
+                )
+                return
 
             update_ts = pos_data.get("updateTime") or pos_data.get("update_time")
             if update_ts:
@@ -534,59 +599,9 @@ class EngineService:
             )
             sm.restore_position(position)
             self._engine._current_stop_order_id = stop_order_id
+            self._engine._sl_verified = True
             self._engine._current_tp_algo_id = tp_order_id
             self._engine._current_take_profit = take_profit_price
-
-            if stop_order_id:
-                try:
-                    if exec_client.verify_algo_order_active(symbol, stop_order_id):
-                        self._engine._sl_verified = True
-                    else:
-                        logger.warning(
-                            "Stop order %s not confirmed as active on exchange for %s; "
-                            "attempting re-registration",
-                            stop_order_id, symbol,
-                        )
-                        self._engine._sl_verified = False
-                        try:
-                            exec_client.cancel_order(symbol, stop_order_id)
-                        except Exception:
-                            pass
-                        re_stop = round(
-                            entry_price * (1 - 0.015) if side == Side.LONG
-                            else entry_price * (1 + 0.015), 2,
-                        )
-                        re_id = _generate_client_order_id("bfat_restore_stop2")
-                        try:
-                            re_resp = exec_client.place_stop_market_order(
-                                symbol, side, size, re_stop, re_id,
-                            )
-                            new_id = str(re_resp.get("orderId", ""))
-                            if new_id and exec_client.verify_algo_order_active(symbol, new_id):
-                                self._engine._current_stop_order_id = new_id
-                                self._engine._sl_verified = True
-                                if re_stop != position.stop_price:
-                                    new_pos = Position(
-                                        symbol=position.symbol,
-                                        side=position.side,
-                                        size=position.size,
-                                        entry_price=position.entry_price,
-                                        stop_price=re_stop,
-                                        initial_stop_price=position.initial_stop_price,
-                                        stop_phase=position.stop_phase,
-                                        entry_time=position.entry_time,
-                                        correlation_id=position.correlation_id,
-                                        take_profit=position.take_profit,
-                                    )
-                                    sm.replace_position(new_pos)
-                                logger.info("Re-registered and verified SL: %s @ %.2f", new_id, re_stop)
-                            else:
-                                logger.error("Re-registered SL %s still not verified", new_id)
-                        except Exception as e2:
-                            logger.error("SL re-registration failed during sync: %s", e2)
-                except Exception as e:
-                    logger.debug("Stop verification check failed: %s", e)
-                    self._engine._sl_verified = False
 
             if tp_order_id:
                 try:
@@ -600,9 +615,9 @@ class EngineService:
                     logger.debug("TP verification check failed: %s", e)
 
             logger.info(
-                "Restored Binance position: %s %s %.6f @ %.2f, stop=%.2f (order=%s), tp=%s (order=%s)",
+                "Restored Binance position: %s %s %.6f @ %.4f, stop=%.4f (order=%s, verified=%s), tp=%s (order=%s)",
                 side.value, symbol, size, entry_price, stop_price, stop_order_id,
-                take_profit_price, tp_order_id,
+                sl_verified, take_profit_price, tp_order_id,
             )
 
             # Pre-evaluate regime and recover missing TP
@@ -636,7 +651,6 @@ class EngineService:
                                 pre_regime, se._last_trend_direction,
                             )
 
-                            # TP recovery: if no TP on exchange, calculate from ATR
                             if take_profit_price is None and self._engine._current_tp_algo_id is None:
                                 self._recover_tp_from_atr(candles, position, exec_client)
                 except Exception as e:

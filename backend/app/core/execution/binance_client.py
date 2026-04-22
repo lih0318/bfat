@@ -20,6 +20,50 @@ BINANCE_FUTURES_TESTNET = "https://testnet.binancefuture.com"
 
 _EXCHANGE_INFO_TTL = 3600  # re-fetch exchange info every 1 hour
 
+# Binance error codes that should NOT be retried
+_PERMANENT_ERROR_CODES = {
+    -1102,  # mandatory param missing
+    -1116,  # invalid orderType
+    -2015,  # invalid API key / permissions
+    -4014,  # price not increased by tick size
+    -4015,  # client order id is not valid
+    -4055,  # invalid position side
+    -4061,  # reduceOnly not allowed with closePosition
+}
+
+# Binance error codes that are retryable (transient)
+_RETRYABLE_ERROR_CODES = {
+    -1001,  # internal error
+    -1003,  # too many requests
+    -1007,  # timeout
+    -1015,  # too many new orders
+    -2021,  # order would immediately trigger
+}
+
+
+class BinanceOrderError(RuntimeError):
+    """Structured error from Binance Algo order API.
+
+    Attributes:
+        code: Binance error code (negative int) or 0 for HTTP/parse errors.
+        retryable: True if the error is transient and can be retried.
+    """
+
+    def __init__(self, message: str, code: int = 0, retryable: bool = False) -> None:
+        super().__init__(message)
+        self.code = code
+        self.retryable = retryable
+
+
+def _classify_error(code: int, msg: str) -> BinanceOrderError:
+    """Build a BinanceOrderError with correct retryable classification."""
+    retryable = code in _RETRYABLE_ERROR_CODES or code not in _PERMANENT_ERROR_CODES
+    return BinanceOrderError(
+        f"Algo order rejected: code={code} msg={msg}",
+        code=code,
+        retryable=retryable,
+    )
+
 
 def _generate_client_order_id(prefix: str) -> str:
     """Generate unique client order ID (max 36 chars for Binance compatibility)."""
@@ -137,14 +181,15 @@ class BinanceExecutionClient:
         return self._request("POST", "/fapi/v1/order", params)
 
     def _post_algo_order(self, params: dict[str, Any]) -> dict:
-        """POST /fapi/v1/algoOrder (conditional STOP / TAKE_PROFIT, etc.)."""
+        """POST /fapi/v1/algoOrder (conditional STOP / TAKE_PROFIT, etc.).
+
+        Raises BinanceOrderError with structured code/retryable info on rejection.
+        """
         resp = self._request("POST", "/fapi/v1/algoOrder", params)
         if isinstance(resp, dict):
             code = resp.get("code")
             if code is not None and int(code) < 0:
-                raise RuntimeError(
-                    f"Algo order rejected: code={code} msg={resp.get('msg')}"
-                )
+                raise _classify_error(int(code), resp.get("msg", ""))
         return resp
 
     @staticmethod
@@ -157,7 +202,7 @@ class BinanceExecutionClient:
     # ── Exchange info & precision ─────────────────────────────────
 
     def _load_exchange_info(self) -> None:
-        """Fetch /fapi/v1/exchangeInfo and cache LOT_SIZE + PRICE_FILTER per symbol."""
+        """Fetch /fapi/v1/exchangeInfo and cache LOT_SIZE, PRICE_FILTER, MIN_NOTIONAL per symbol."""
         now = time.monotonic()
         if self._symbol_filters and now - self._exchange_info_ts < _EXCHANGE_INFO_TTL:
             return
@@ -182,6 +227,11 @@ class BinanceExecutionClient:
                     elif ft == "PRICE_FILTER":
                         filters["price_step"] = float(f.get("tickSize", 0))
                         filters["price_precision"] = _step_to_precision(filters["price_step"])
+                    elif ft == "MIN_NOTIONAL":
+                        filters["min_notional"] = float(f.get("notional", 0))
+                tp = sym.get("triggerProtect")
+                if tp is not None:
+                    filters["trigger_protect"] = float(tp)
                 if filters:
                     self._symbol_filters[name] = filters
             self._exchange_info_ts = now
@@ -442,16 +492,88 @@ class BinanceExecutionClient:
         )
         return data if isinstance(data, list) else []
 
+    def pre_validate_trigger_price(
+        self, symbol: str, side: Side, trigger_price: float, order_type: str,
+    ) -> None:
+        """Raise ValueError if the trigger would be immediately rejected by Binance.
+
+        For STOP_MARKET (reduceOnly, i.e. closing a position):
+          LONG position close -> side=SELL -> trigger must be <= current price
+          SHORT position close -> side=BUY -> trigger must be >= current price
+        For TAKE_PROFIT_MARKET (reduceOnly):
+          LONG position close -> side=SELL -> trigger must be >= current price
+          SHORT position close -> side=BUY -> trigger must be <= current price
+        """
+        current = self.get_ticker_price(symbol)
+        if current <= 0:
+            return
+        binance_side = _side_to_binance(side, for_reduce_only=True)
+        if order_type == "STOP_MARKET":
+            if binance_side == "BUY" and trigger_price < current:
+                raise ValueError(
+                    f"STOP_MARKET BUY trigger {trigger_price} < market {current}; would not trigger"
+                )
+            if binance_side == "SELL" and trigger_price > current:
+                raise ValueError(
+                    f"STOP_MARKET SELL trigger {trigger_price} > market {current}; would not trigger"
+                )
+        elif order_type == "TAKE_PROFIT_MARKET":
+            if binance_side == "SELL" and trigger_price < current:
+                raise ValueError(
+                    f"TP_MARKET SELL trigger {trigger_price} < market {current}; would immediately trigger"
+                )
+            if binance_side == "BUY" and trigger_price > current:
+                raise ValueError(
+                    f"TP_MARKET BUY trigger {trigger_price} > market {current}; would immediately trigger"
+                )
+
     def verify_algo_order_active(self, symbol: str, algo_order_id: str) -> bool:
-        """Check if an algo order is live (NEW) on the exchange."""
-        try:
-            for o in self.get_open_algo_orders(symbol):
-                aid = o.get("algoId")
-                if aid is not None and str(aid) == str(algo_order_id):
-                    status = o.get("algoStatus") or o.get("status")
-                    return status == "NEW"
-        except Exception:
-            pass
+        """Check if an algo order is live (NEW) on the exchange.
+
+        Returns False only when the order list was successfully retrieved
+        but the order was not found or not in NEW status. Raises on API failure
+        so callers can distinguish 'order gone' from 'network error'.
+        """
+        orders = self.get_open_algo_orders(symbol)
+        for o in orders:
+            aid = o.get("algoId")
+            if aid is not None and str(aid) == str(algo_order_id):
+                status = o.get("algoStatus") or o.get("status")
+                return status == "NEW"
+        return False
+
+    _VERIFY_BACKOFF_DELAYS = (0.5, 1.0, 2.0)
+
+    def verify_algo_order_with_backoff(
+        self, symbol: str, algo_order_id: str,
+    ) -> bool:
+        """Verify that an algo order is live (NEW) with multiple retry attempts.
+
+        Retries with increasing delay to tolerate Binance propagation lag.
+        Returns True only when the order is confirmed active.
+        Returns False when at least one successful API call found no order.
+        Raises RuntimeError only if EVERY attempt failed due to API errors.
+        """
+        last_err: Exception | None = None
+        had_successful_query = False
+        for delay in self._VERIFY_BACKOFF_DELAYS:
+            time.sleep(delay)
+            try:
+                if self.verify_algo_order_active(symbol, algo_order_id):
+                    return True
+                had_successful_query = True
+            except Exception as e:
+                last_err = e
+                logger.warning(
+                    "[VERIFY_BACKOFF] attempt failed for %s: %s", algo_order_id, e,
+                )
+                continue
+        if had_successful_query:
+            return False
+        if last_err is not None:
+            raise RuntimeError(
+                f"All verification attempts failed for {algo_order_id}: {last_err}"
+            ) from last_err
         return False
 
     def cancel_all_algo_orders(self, symbol: str) -> int:
