@@ -128,6 +128,9 @@ class EngineService:
             system_log_repository=system_log_repo,
             symbol=self._settings.bfat_symbol,
             notifier=notifier,
+            scaleout_enabled=self._settings.bfat_scaleout_enabled,
+            scaleout_r_multiple=self._settings.bfat_scaleout_r_multiple,
+            scaleout_fraction=self._settings.bfat_scaleout_fraction,
         )
 
     _EQUITY_TTL = 15.0  # seconds — fetch from Binance at most once per TTL

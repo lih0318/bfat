@@ -153,17 +153,17 @@ class BinanceUserStream:
                             if result:
                                 exit_price, symbol_in_msg = result
                                 logger.info(
-                                    "[STOP_FILLED_DETECTED]",
+                                    "[REDUCE_ONLY_FILLED]",
                                     extra={"symbol": symbol_in_msg, "price": exit_price},
                                 )
                                 try:
                                     equity = self._equity_provider()
                                 except Exception:
-                                    continue
-                                if equity <= 0:
-                                    continue
+                                    equity = 0.0
                                 try:
-                                    self._engine.on_position_closed(exit_price, equity)
+                                    self._engine.on_reduce_only_fill_from_stream(
+                                        exit_price, equity,
+                                    )
                                 except (CancelFailureError, NewStopPlacementError):
                                     continue
                                 except RuntimeError:

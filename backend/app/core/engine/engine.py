@@ -223,6 +223,10 @@ class BFATEngine:
         system_log_repository: Any,
         symbol: str,
         notifier: Any | None = None,
+        *,
+        scaleout_enabled: bool = True,
+        scaleout_r_multiple: float = 1.0,
+        scaleout_fraction: float = 0.5,
     ) -> None:
         self._strategy_engine = strategy_engine
         self._risk_manager = risk_manager
@@ -248,6 +252,11 @@ class BFATEngine:
         self._entry_insight_snapshot: dict | None = None
         self._last_sl_recover_ts: float = 0.0
         self._post_close_cooldown_remaining: int = 0
+        self._scaleout_enabled: bool = scaleout_enabled
+        self._scaleout_r_multiple: float = float(scaleout_r_multiple)
+        self._scaleout_fraction: float = float(scaleout_fraction)
+        self._be_scaleout_done: bool = False
+        self._be_scaleout_inflight: bool = False
 
     _SL_RECOVER_COOLDOWN = 30.0
     POST_CLOSE_COOLDOWN_CANDLES = 3
@@ -513,6 +522,199 @@ class BFATEngine:
                     message=str(e),
                 )
 
+    def _one_r_price(self, pos: Position) -> float | None:
+        r_dist = abs(pos.entry_price - pos.initial_stop_price)
+        if r_dist <= 0:
+            return None
+        m = self._scaleout_r_multiple
+        if pos.side == Side.LONG:
+            return pos.entry_price + m * r_dist
+        return pos.entry_price - m * r_dist
+
+    def _is_one_r_hit(self, pos: Position, bar: dict) -> bool:
+        one_r = self._one_r_price(pos)
+        if one_r is None:
+            return False
+        hi = float(bar.get("high") or 0)
+        lo = float(bar.get("low") or 0)
+        if pos.side == Side.LONG:
+            return hi >= one_r
+        return lo > 0 and lo <= one_r
+
+    def _breakeven_stop_trigger(self, pos: Position) -> float:
+        f = self._execution._get_filters(self._symbol)
+        tick = float(f.get("price_step") or 0)
+        e = pos.entry_price
+        if tick > 0:
+            if pos.side == Side.LONG:
+                return self._execution.format_price(self._symbol, e - tick, ceil=False)
+            return self._execution.format_price(self._symbol, e + tick, ceil=True)
+        if pos.side == Side.LONG:
+            return e * (1 - 1e-6)
+        return e * (1 + 1e-6)
+
+    def _exchange_position_size(self) -> float:
+        p = self._execution.get_position(self._symbol)
+        raw = p.get("positionAmt") or p.get("position_amt") or 0
+        return abs(float(raw))
+
+    def on_reduce_only_fill_from_stream(
+        self, exit_price: float, equity: float,
+    ) -> bool:
+        """User stream: reduceOnly FILLED. If still open, do not call on_position_closed.
+        If position flat, full exit. Returns True: caller may skip follow-up handling."""
+        if self._state_machine.state != PositionState.OPEN:
+            return True
+        if not self._is_position_flat_on_exchange():
+            if self._be_scaleout_inflight:
+                return True
+            return True
+        self.on_position_closed(exit_price, equity)
+        return True
+
+    def _maybe_breakeven_scaleout(
+        self, bar: dict, equity: float, candles: list[dict],
+    ) -> None:
+        if not self._scaleout_enabled or equity <= 0:
+            return
+        if self._be_scaleout_inflight or self._be_scaleout_done:
+            return
+        if self._state_machine.state != PositionState.OPEN:
+            return
+        pos = self._state_machine.position
+        if pos is None or pos.stop_phase != StopPhase.INITIAL:
+            return
+        if not self._is_one_r_hit(pos, bar):
+            return
+        half = self._execution.format_quantity(
+            self._symbol, pos.size * self._scaleout_fraction,
+        )
+        if half <= 0 or half >= pos.size:
+            logger.info(
+                "[BE_SCALEOUT_SKIP] half=%.6f size=%.6f",
+                half, pos.size,
+            )
+            return
+
+        self._be_scaleout_inflight = True
+        side = pos.side
+        be_stop = self._breakeven_stop_trigger(pos)
+        tp_price = pos.take_profit
+        atr_val = _atr(candles, ATR_PERIOD)
+        try:
+            if self._current_tp_algo_id:
+                try:
+                    self._execution.cancel_order(
+                        self._symbol, self._current_tp_algo_id,
+                    )
+                except Exception:
+                    pass
+                self._current_tp_algo_id = None
+            if self._current_stop_order_id:
+                try:
+                    self._execution.cancel_order(
+                        self._symbol, self._current_stop_order_id,
+                    )
+                except Exception:
+                    pass
+                self._current_stop_order_id = None
+
+            mkt = self._execution.place_reduce_only_market_order(
+                self._symbol,
+                side,
+                half,
+                _generate_client_order_id("bfat_be_half"),
+            )
+            mkt = _validate_response_dict(mkt)
+            st = mkt.get("status", "")
+            exq = float(mkt.get("executedQty", 0) or 0)
+            if st and st != "FILLED" and exq <= 0:
+                raise RuntimeError(
+                    f"be_half market not executed: status={st} {mkt!r}"
+                )
+            for _ in range(15):
+                time.sleep(0.2)
+                ex_sz = self._exchange_position_size()
+                ex_sz = self._execution.format_quantity(self._symbol, ex_sz)
+                if 0 < ex_sz < pos.size - 1e-12:
+                    break
+                if ex_sz <= 1e-8:
+                    logger.error(
+                        "[BE_SCALEOUT] position flat after half; abort state sync"
+                    )
+                    return
+            else:
+                ex_sz = self._execution.format_quantity(
+                    self._symbol, self._exchange_position_size(),
+                )
+                if ex_sz <= 0 or ex_sz >= pos.size - 1e-12:
+                    raise RuntimeError("be_half: exchange size did not reduce")
+
+            new_pos = Position(
+                symbol=pos.symbol,
+                side=pos.side,
+                size=ex_sz,
+                entry_price=pos.entry_price,
+                stop_price=be_stop,
+                initial_stop_price=pos.initial_stop_price,
+                stop_phase=StopPhase.BREAKEVEN,
+                entry_time=pos.entry_time,
+                correlation_id=pos.correlation_id,
+                take_profit=pos.take_profit,
+            )
+            self._state_machine.replace_position(new_pos)
+            rpos = self._state_machine.position
+            if rpos is None:
+                raise RuntimeError("be_half: position missing after replace")
+            a = atr_val if atr_val > 0 else 0.1
+
+            sl_id, final_sl = self._place_stop_with_retry(
+                rpos.side, rpos.size, be_stop, rpos.entry_price, a,
+            )
+            self._current_stop_order_id = sl_id
+            self._sl_verified = True
+            if abs(final_sl - be_stop) > 1e-8:
+                try:
+                    self._state_machine.on_stop_update(
+                        StopPhase.BREAKEVEN, final_sl,
+                    )
+                except ValueError:
+                    pass
+
+            if tp_price is not None and float(tp_price) > 0:
+                al_id, f_tp = self._validate_and_place_tp(
+                    rpos.side, rpos.size, float(tp_price), rpos.entry_price, a,
+                    fail_closed=False,
+                )
+                self._current_tp_algo_id = al_id
+                self._current_take_profit = f_tp
+                if f_tp and abs(float(f_tp) - float(tp_price)) > 1e-8:
+                    try:
+                        self._state_machine.on_take_profit_update(f_tp)
+                    except ValueError:
+                        pass
+            self._be_scaleout_done = True
+            self._system_log.insert(
+                level="INFO",
+                event="be_scaleout_done",
+                message=f"1R half + BE; sl={final_sl} size={rpos.size:.6f} tp={self._current_take_profit}",
+            )
+            self._check_state_consistency()
+        except Exception as e:
+            logger.exception("[BE_SCALEOUT_FAILED] %s", e)
+            self._system_log.insert(
+                level="ERROR",
+                event="be_scaleout_failed",
+                message=str(e),
+            )
+            if self._state_machine.state == PositionState.OPEN:
+                try:
+                    self._try_recover_sl(candles)
+                except Exception:
+                    pass
+        finally:
+            self._be_scaleout_inflight = False
+
     def evaluate_for_insight(self, candles: list[dict]) -> None:
         """Run strategy evaluation to populate Insight only. No orders, no position changes."""
         self._strategy_engine.evaluate_for_insight(candles)
@@ -537,6 +739,7 @@ class BFATEngine:
             if self._current_stop_order_id is None:
                 self._try_recover_sl(candles)
             self._check_realtime_tp(live_bar, equity)
+            self._maybe_breakeven_scaleout(live_bar, equity, candles)
             return
         if self._state_machine.state != PositionState.FLAT:
             return
@@ -699,6 +902,7 @@ class BFATEngine:
                 "[INTRABAR_ENTRY_FILLED] side=%s price=%.4f size=%.6f bucket=%s",
                 signal.side.value, actual_entry_price, actual_size, bucket_ts,
             )
+            self._be_scaleout_done = False
         except RuntimeError:
             if self._state_machine.state == PositionState.ENTERING:
                 self._state_machine.rollback_entry()
@@ -970,6 +1174,7 @@ class BFATEngine:
                 except Exception:
                     pass
                 self._check_state_consistency()
+                self._be_scaleout_done = False
             except RuntimeError as e:
                 if self._state_machine.state == PositionState.ENTERING:
                     self._state_machine.rollback_entry()
@@ -982,6 +1187,10 @@ class BFATEngine:
 
         # ── OPEN → deferred SL/TP health check, logical TP fallback.
         if self._state_machine.state == PositionState.OPEN:
+            pos = self._state_machine.position
+            if pos is None:
+                return
+            self._maybe_breakeven_scaleout(candles[-1], equity, candles)
             pos = self._state_machine.position
             if pos is None:
                 return
@@ -1399,6 +1608,8 @@ class BFATEngine:
         self._tp_last_error = None
         self._entry_insight_snapshot = None
         self._post_close_cooldown_remaining = self.POST_CLOSE_COOLDOWN_CANDLES
+        self._be_scaleout_done = False
+        self._be_scaleout_inflight = False
         logger.info(
             "[POST_CLOSE_COOLDOWN] activated: %d candles before next entry",
             self._post_close_cooldown_remaining,

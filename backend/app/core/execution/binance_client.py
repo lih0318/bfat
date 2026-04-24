@@ -295,6 +295,29 @@ class BinanceExecutionClient:
         }
         return self._post_order(params)
 
+    def place_reduce_only_market_order(
+        self,
+        symbol: str,
+        position_side: Side,
+        quantity: float,
+        client_order_id: str,
+    ) -> dict:
+        """Close or reduce a position: MARKET on the exit side with reduceOnly (USDS-M one-way)."""
+        quantity = self.format_quantity(symbol, quantity)
+        if quantity <= 0:
+            raise ValueError(
+                f"quantity after LOT_SIZE formatting is 0 (below minQty for {symbol})"
+            )
+        params = {
+            "symbol": symbol,
+            "side": _side_to_binance(position_side, for_reduce_only=True),
+            "type": "MARKET",
+            "quantity": quantity,
+            "reduceOnly": "true",
+            "newClientOrderId": client_order_id,
+        }
+        return self._post_order(params)
+
     def place_stop_market_order(
         self,
         symbol: str,

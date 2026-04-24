@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     binance_api_secret: str = ""
     binance_testnet: bool = True
     bfat_symbol: str = "BTCUSDT"
+    # 1R partial to breakeven: half (default) at 1R, move SL to entry tick, re-place TP for remainder
+    bfat_scaleout_enabled: bool = True
+    bfat_scaleout_r_multiple: float = 1.0
+    bfat_scaleout_fraction: float = 0.5
     app_username: str = ""
     app_password: str = ""
     jwt_secret: str = "change-me-in-production"
