@@ -16,6 +16,13 @@ def _default_status():
         "equity": 0.0,
         "kill_switch_triggered": False,
         "error": "Engine service not configured",
+        "diagnostics": {
+            "market_stream": None,
+            "user_stream": None,
+            "last_insight_update_ts": None,
+            "insight_age_seconds": None,
+            "insight_stale": False,
+        },
     }
 
 

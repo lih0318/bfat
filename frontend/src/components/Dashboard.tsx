@@ -8,6 +8,24 @@ import { LogsPanel } from './LogsPanel'
 import { PositionCard, type PositionData } from './PositionCard'
 import { TradesTab } from './TradesTab'
 
+interface StreamDiag {
+  connected: boolean
+  last_message_ts: number
+  last_disconnect_ts: number
+  last_error: string
+  reconnect_count: number
+  current_backoff: number
+  candle_buffer_size?: number
+}
+
+interface Diagnostics {
+  market_stream: StreamDiag | null
+  user_stream: StreamDiag | null
+  last_insight_update_ts: number | null
+  insight_age_seconds: number | null
+  insight_stale: boolean
+}
+
 interface StatusData {
   engine_state: string
   position: Record<string, unknown> | null
@@ -29,6 +47,7 @@ interface StatusData {
   kill_switch_triggered: boolean
   post_close_cooldown: number
   error: string | null
+  diagnostics?: Diagnostics
 }
 
 interface InsightData {
@@ -228,6 +247,20 @@ export function Dashboard() {
 
             {status?.system_health === 'DEGRADED' && (
               <span className="badge bg-[var(--warning-muted)] text-[var(--warning)]">DEGRADED</span>
+            )}
+
+            {isRunning && status?.diagnostics?.market_stream && !status.diagnostics.market_stream.connected && (
+              <span className="badge bg-[var(--negative-muted)] text-[var(--negative)]">STREAM OFFLINE</span>
+            )}
+
+            {isRunning && status?.diagnostics?.market_stream?.connected && status?.diagnostics?.market_stream?.reconnect_count > 0 && (
+              <span className="badge bg-[var(--warning-muted)] text-[var(--warning)]">
+                RECONNECTED x{status.diagnostics.market_stream.reconnect_count}
+              </span>
+            )}
+
+            {isRunning && status?.diagnostics?.insight_stale && (
+              <span className="badge bg-[var(--warning-muted)] text-[var(--warning)]">INSIGHT STALE</span>
             )}
           </div>
 

@@ -84,7 +84,16 @@ app.include_router(log_router)
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "version": "2.0.0"}
+    svc = getattr(app.state, "engine_service", None)
+    stream_ok = True
+    if svc is not None:
+        diag = svc._build_stream_diagnostics() if hasattr(svc, "_build_stream_diagnostics") else {}
+        ms = diag.get("market_stream")
+        if ms and not ms.get("connected"):
+            stream_ok = False
+        if diag.get("insight_stale"):
+            stream_ok = False
+    return {"status": "ok", "version": "2.0.0", "stream_ok": stream_ok}
 
 
 @app.websocket("/ws/status")

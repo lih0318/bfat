@@ -235,9 +235,34 @@ class EngineService:
             logger.debug("Binance live position fetch failed: %s", e)
             return self._live_pos_cache
 
+    _INSIGHT_STALE_THRESHOLD_S = 120.0  # 2 min without insight update → stale
+
+    def _build_stream_diagnostics(self) -> dict[str, Any]:
+        """Collect diagnostics from market and user streams."""
+        now = time.time()
+        market = self._market_stream.get_diagnostics() if self._market_stream else None
+        user = self._user_stream.get_diagnostics() if self._user_stream else None
+
+        insight_ts: float = 0.0
+        if self._engine is not None:
+            se = getattr(self._engine, "_strategy_engine", None)
+            if se is not None:
+                insight_ts = getattr(se, "_last_insight_update_ts", 0.0)
+        insight_age = round(now - insight_ts, 1) if insight_ts > 0 else None
+        insight_stale = insight_age is not None and insight_age > self._INSIGHT_STALE_THRESHOLD_S
+
+        return {
+            "market_stream": market,
+            "user_stream": user,
+            "last_insight_update_ts": insight_ts if insight_ts > 0 else None,
+            "insight_age_seconds": insight_age,
+            "insight_stale": insight_stale,
+        }
+
     def _get_status(self) -> dict[str, Any]:
         """Build status dict for API/WebSocket."""
         equity = self._equity_provider()
+        diagnostics = self._build_stream_diagnostics()
         if self._engine is None:
             live_pos = self._fetch_binance_position()
             live_stop = live_pos.get("stop_price", 0) if live_pos else 0
@@ -267,6 +292,7 @@ class EngineService:
                 "kill_switch_triggered": False,
                 "post_close_cooldown": 0,
                 "error": self._critical_error,
+                "diagnostics": diagnostics,
             }
         sm = self._engine._state_machine
         pos = sm.position
@@ -355,6 +381,14 @@ class EngineService:
         except Exception:
             pass
         cooldown_remaining = getattr(self._engine, "_post_close_cooldown_remaining", 0)
+
+        if diagnostics.get("insight_stale"):
+            system_health = "DEGRADED"
+
+        market_diag = diagnostics.get("market_stream")
+        if market_diag and not market_diag.get("connected"):
+            system_health = "DEGRADED"
+
         return {
             "engine_state": sm.state.value,
             "position": pos_dict,
@@ -380,6 +414,7 @@ class EngineService:
             "kill_switch_triggered": kill.is_triggered(),
             "post_close_cooldown": cooldown_remaining,
             "error": self._critical_error,
+            "diagnostics": diagnostics,
         }
 
     def _sync_binance_position(self) -> None:

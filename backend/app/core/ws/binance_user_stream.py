@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import time
 from typing import Any, Callable
 
 import websockets
@@ -71,6 +72,24 @@ class BinanceUserStream:
         self._listen_key: str | None = None
         self._keepalive_task: asyncio.Task | None = None
         self._run_task: asyncio.Task | None = None
+        # ── Observability fields (read-only externally) ──
+        self._connected: bool = False
+        self._last_message_ts: float = 0.0
+        self._last_disconnect_ts: float = 0.0
+        self._last_error: str = ""
+        self._reconnect_count: int = 0
+        self._current_backoff: float = 0.0
+
+    def get_diagnostics(self) -> dict[str, Any]:
+        """Return stream health snapshot for status API."""
+        return {
+            "connected": self._connected,
+            "last_message_ts": self._last_message_ts,
+            "last_disconnect_ts": self._last_disconnect_ts,
+            "last_error": self._last_error,
+            "reconnect_count": self._reconnect_count,
+            "current_backoff": self._current_backoff,
+        }
 
     async def _keepalive_loop(self) -> None:
         """PUT listenKey every 30 minutes. Uses current _listen_key session."""
@@ -88,8 +107,8 @@ class BinanceUserStream:
                     self._rest_base,
                     key,
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("USER_WS_KEEPALIVE_FAILED %s: %s", type(e).__name__, e)
 
     async def _run_loop(self) -> None:
         """Connect and process. Reconnect on disconnect."""
@@ -102,12 +121,16 @@ class BinanceUserStream:
                     self._rest_base,
                 )
                 self._listen_key = listen_key
-            except Exception:
+            except Exception as e:
+                self._last_error = f"listen_key: {type(e).__name__}: {e}"
+                logger.warning("USER_WS_LISTEN_KEY_ERROR %s: %s", type(e).__name__, e)
                 await asyncio.sleep(min(delay, 30))
                 delay = min(delay * 2, 30.0)
+                self._current_backoff = delay
                 continue
 
             delay = 1.0
+            self._current_backoff = 0.0
             url = f"{self._ws_base}/{listen_key}"
             try:
                 async with websockets.connect(
@@ -117,9 +140,12 @@ class BinanceUserStream:
                     close_timeout=5,
                 ) as ws:
                     self._ws = ws
+                    self._connected = True
+                    logger.info("USER_WS_OPENED")
                     async for raw in ws:
                         if not self._running:
                             break
+                        self._last_message_ts = time.time()
                         try:
                             msg = json.loads(raw)
                             expected_symbol = getattr(self._engine, "_symbol", None)
@@ -145,27 +171,40 @@ class BinanceUserStream:
                                     raise
                         except json.JSONDecodeError:
                             continue
-                        except websockets.ConnectionClosed:
+                        except websockets.ConnectionClosed as e:
+                            logger.warning("USER_WS_CLOSED code=%s reason=%s", e.code, e.reason)
                             break
-                        except Exception:
+                        except Exception as e:
+                            logger.warning("USER_WS_MSG_ERROR %s: %s", type(e).__name__, e)
+                            self._last_error = f"{type(e).__name__}: {e}"
                             break
             except asyncio.CancelledError:
                 raise
             except RuntimeError:
                 raise
-            except websockets.ConnectionClosed:
-                pass
-            except Exception:
-                pass
+            except websockets.ConnectionClosed as e:
+                logger.warning("USER_WS_CLOSED (outer) code=%s reason=%s", e.code, e.reason)
+            except Exception as e:
+                logger.warning("USER_WS_ERROR %s: %s", type(e).__name__, e, exc_info=True)
+                self._last_error = f"{type(e).__name__}: {e}"
             self._ws = None
+            self._connected = False
+            self._last_disconnect_ts = time.time()
             self._listen_key = None
             if self._running:
+                self._reconnect_count += 1
                 delay = min(delay * 2, 30.0)
+                self._current_backoff = delay
+                logger.info(
+                    "USER_WS_RECONNECT_SCHEDULED delay=%.1fs reconnect_count=%d",
+                    delay, self._reconnect_count,
+                )
                 await asyncio.sleep(delay)
 
     async def start(self) -> None:
         """Start user stream and keepalive."""
         self._running = True
+        self._reconnect_count = 0
         self._keepalive_task = asyncio.create_task(self._keepalive_loop())
         self._run_task = asyncio.create_task(self._run_loop())
 

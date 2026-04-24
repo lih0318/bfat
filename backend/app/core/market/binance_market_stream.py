@@ -97,6 +97,25 @@ class BinanceMarketStream:
         self._ws: Any = None
         self._run_task: asyncio.Task | None = None
         self._last_live_insight_ts: float = 0.0
+        # ── Observability fields (read-only externally) ──
+        self._connected: bool = False
+        self._last_message_ts: float = 0.0
+        self._last_disconnect_ts: float = 0.0
+        self._last_error: str = ""
+        self._reconnect_count: int = 0
+        self._current_backoff: float = 0.0
+
+    def get_diagnostics(self) -> dict[str, Any]:
+        """Return stream health snapshot for status API."""
+        return {
+            "connected": self._connected,
+            "last_message_ts": self._last_message_ts,
+            "last_disconnect_ts": self._last_disconnect_ts,
+            "last_error": self._last_error,
+            "reconnect_count": self._reconnect_count,
+            "current_backoff": self._current_backoff,
+            "candle_buffer_size": len(self._candles),
+        }
 
     @property
     def candles(self) -> list[dict]:
@@ -143,10 +162,14 @@ class BinanceMarketStream:
                     close_timeout=5,
                 ) as ws:
                     delay = 1.0
+                    self._current_backoff = 0.0
                     self._ws = ws
+                    self._connected = True
+                    logger.info("MARKET_WS_OPENED symbol=%s testnet=%s", self._symbol, self._testnet)
                     async for raw in ws:
                         if not self._running:
                             break
+                        self._last_message_ts = time.time()
                         try:
                             msg = json.loads(raw)
 
@@ -205,36 +228,48 @@ class BinanceMarketStream:
                                         )
                                         self._last_live_insight_ts = now
                                     except Exception:
-                                        logger.debug("live insight update error", exc_info=True)
+                                        logger.warning("live insight update error", exc_info=True)
 
                         except json.JSONDecodeError:
                             continue
-                        except websockets.ConnectionClosed:
+                        except websockets.ConnectionClosed as e:
+                            logger.warning("MARKET_WS_CLOSED code=%s reason=%s", e.code, e.reason)
                             break
-                        except Exception:
+                        except Exception as e:
+                            logger.warning("MARKET_WS_MSG_ERROR %s: %s", type(e).__name__, e)
+                            self._last_error = f"{type(e).__name__}: {e}"
                             break
             except asyncio.CancelledError:
                 raise
-            except websockets.ConnectionClosed:
-                pass
-            except Exception:
-                pass
+            except websockets.ConnectionClosed as e:
+                logger.warning("MARKET_WS_CLOSED (outer) code=%s reason=%s", e.code, e.reason)
+            except Exception as e:
+                logger.warning("MARKET_WS_ERROR %s: %s", type(e).__name__, e, exc_info=True)
+                self._last_error = f"{type(e).__name__}: {e}"
             self._ws = None
+            self._connected = False
+            self._last_disconnect_ts = time.time()
             if self._running:
+                self._reconnect_count += 1
                 delay = min(delay * 2, 30.0)
+                self._current_backoff = delay
+                logger.info(
+                    "MARKET_WS_RECONNECT_SCHEDULED delay=%.1fs reconnect_count=%d",
+                    delay, self._reconnect_count,
+                )
                 await asyncio.sleep(delay)
 
     async def start(self) -> None:
         """Start the stream. Fetches initial klines, seeds Insight from past bars, then connects to WebSocket."""
         self._running = True
+        self._reconnect_count = 0
         self._fetch_initial_klines()
-        # Seed Insight from past data so Insight tab shows immediately (entry-precedent bars)
         try:
             initial_candles = list(self._candles)
             if initial_candles:
                 self._engine.evaluate_for_insight(initial_candles)
         except Exception:
-            pass
+            logger.warning("MARKET_INITIAL_INSIGHT_SEED_FAILED", exc_info=True)
         self._run_task = asyncio.create_task(self._run_loop())
 
     async def stop(self) -> None:

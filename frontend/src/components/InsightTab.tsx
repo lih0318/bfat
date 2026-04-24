@@ -190,6 +190,11 @@ export function InsightTab() {
   }, [accessToken])
 
   const updatedAgo = useRelativeTime(data?.last_insight_update_ts)
+  const STALE_THRESHOLD_S = 120
+  const insightAge = data?.last_insight_update_ts
+    ? Math.max(0, Math.floor(Date.now() / 1000 - data.last_insight_update_ts))
+    : null
+  const isStale = insightAge !== null && insightAge > STALE_THRESHOLD_S
 
   if (loading) {
     return (
@@ -231,9 +236,10 @@ export function InsightTab() {
           <div className="flex items-center gap-3">
             <p className="section-title">Market Insight</p>
             {updatedAgo && (
-              <span className="flex items-center gap-1.5 text-[11px] text-[var(--text-muted)]">
-                <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--positive)] animate-pulse" />
+              <span className={`flex items-center gap-1.5 text-[11px] ${isStale ? 'text-[var(--warning)]' : 'text-[var(--text-muted)]'}`}>
+                <span className={`inline-block h-1.5 w-1.5 rounded-full ${isStale ? 'bg-[var(--warning)]' : 'bg-[var(--positive)] animate-pulse'}`} />
                 {updatedAgo}
+                {isStale && <span className="ml-1 text-[10px] font-semibold uppercase">STALE</span>}
               </span>
             )}
           </div>
