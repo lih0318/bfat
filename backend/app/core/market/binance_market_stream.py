@@ -26,6 +26,7 @@ BINANCE_REST_TESTNET = "https://testnet.binancefuture.com"
 BINANCE_WS_TESTNET = "wss://stream.binancefuture.com/ws"
 MAX_CANDLE_BUFFER = 500
 _LIVE_INSIGHT_INTERVAL_S = 15  # throttle live insight updates
+_INSIGHT_REST_REFRESH_S = 60.0  # periodic REST tail sync + evaluate_for_insight (insight stays fresh if WS stalls)
 
 
 def _parse_closed_candle(msg: dict) -> dict | None:
@@ -96,6 +97,7 @@ class BinanceMarketStream:
         self._running = False
         self._ws: Any = None
         self._run_task: asyncio.Task | None = None
+        self._insight_refresh_task: asyncio.Task | None = None
         self._last_live_insight_ts: float = 0.0
         # ── Observability fields (read-only externally) ──
         self._connected: bool = False
@@ -143,6 +145,72 @@ class BinanceMarketStream:
                 "volume": float(bar[5]),
                 "timestamp": str(bar[6]),
             })
+
+    def _sync_tail_klines_from_rest(self) -> None:
+        """Fetch recent 15m bars; update/replace tail. Last row is active (incomplete), so we merge all but last."""
+        url = f"{self._rest_base}/fapi/v1/klines"
+        params = {"symbol": self._symbol.upper(), "interval": "15m", "limit": 8}
+        resp = requests.get(url, params=params, timeout=15)
+        if resp.status_code != 200:
+            logger.warning(
+                "INSIGHT_REST_TAIL http=%s body=%s",
+                resp.status_code, (resp.text or "")[:200],
+            )
+            return
+        data = resp.json()
+        if not isinstance(data, list) or len(data) < 2:
+            return
+        complete_rows = data[:-1]
+        for row in complete_rows:
+            if len(row) < 7:
+                continue
+            c = {
+                "open": float(row[1]),
+                "high": float(row[2]),
+                "low": float(row[3]),
+                "close": float(row[4]),
+                "volume": float(row[5]),
+                "timestamp": str(row[6]),
+            }
+            if not self._candles:
+                self._candles.append(c)
+                continue
+            last_ts = int(self._candles[-1]["timestamp"])
+            ct = int(c["timestamp"])
+            if ct == last_ts:
+                self._candles[-1] = c
+            elif ct > last_ts:
+                self._candles.append(c)
+
+    def _periodic_insight_refresh_sync(self) -> None:
+        """REST tail sync + full insight eval; run in a thread from the async loop."""
+        if not self._running or not self._candles:
+            return
+        try:
+            self._sync_tail_klines_from_rest()
+        except Exception:
+            logger.warning("INSIGHT_REST_TAIL_SYNC_FAILED", exc_info=True)
+            return
+        candles_list = list(self._candles)
+        if not candles_list:
+            return
+        try:
+            self._engine.evaluate_for_insight(candles_list)
+        except Exception:
+            logger.warning("INSIGHT_PERIODIC_EVALUATE_FAILED", exc_info=True)
+
+    async def _periodic_insight_refresh_loop(self) -> None:
+        while self._running:
+            try:
+                await asyncio.sleep(_INSIGHT_REST_REFRESH_S)
+            except asyncio.CancelledError:
+                raise
+            if not self._running:
+                break
+            try:
+                await asyncio.to_thread(self._periodic_insight_refresh_sync)
+            except Exception:
+                logger.warning("INSIGHT_PERIODIC_REFRESH_FAILED", exc_info=True)
 
     async def _run_loop(self) -> None:
         """Connect and process messages. Reconnect on disconnect.
@@ -271,10 +339,20 @@ class BinanceMarketStream:
         except Exception:
             logger.warning("MARKET_INITIAL_INSIGHT_SEED_FAILED", exc_info=True)
         self._run_task = asyncio.create_task(self._run_loop())
+        self._insight_refresh_task = asyncio.create_task(
+            self._periodic_insight_refresh_loop(),
+        )
 
     async def stop(self) -> None:
         """Stop the stream. Cancel tasks, close ws."""
         self._running = False
+        if self._insight_refresh_task:
+            self._insight_refresh_task.cancel()
+            try:
+                await self._insight_refresh_task
+            except asyncio.CancelledError:
+                pass
+            self._insight_refresh_task = None
         if self._run_task:
             self._run_task.cancel()
             try:

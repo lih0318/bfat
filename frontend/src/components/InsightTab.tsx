@@ -185,7 +185,7 @@ export function InsightTab() {
       }
     }
     fetch_()
-    const interval = setInterval(fetch_, 15000)
+    const interval = setInterval(fetch_, 60_000)
     return () => { cancelled = true; clearInterval(interval) }
   }, [accessToken])
 
