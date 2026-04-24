@@ -342,8 +342,10 @@ export function InsightTab() {
 
       {/* Entry Conditions */}
       {data?.entry_conditions && data.entry_conditions.length > 0 && (() => {
-        const firstLabel = data.entry_conditions![0]?.label ?? ''
-        const side = firstLabel.includes('LONG') ? 'LONG' : firstLabel.includes('SHORT') ? 'SHORT' : null
+        const labels = data.entry_conditions!.map(c => c.label)
+        const hasLong = labels.some(l => l.includes('LONG'))
+        const hasShort = labels.some(l => l.includes('SHORT'))
+        const side = (hasLong && hasShort) ? null : hasLong ? 'LONG' : hasShort ? 'SHORT' : null
         return (
         <div className="card p-6">
           <div className="flex items-center gap-2.5 mb-3">

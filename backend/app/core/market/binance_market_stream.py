@@ -209,16 +209,16 @@ class BinanceMarketStream:
                                     equity = self._equity_provider()
                                 except Exception:
                                     equity = 0.0
-                                if equity <= 0:
-                                    continue
-                                try:
-                                    self._engine.on_market_update(
-                                        candles_list, live_bar, equity,
-                                    )
-                                except (CancelFailureError, NewStopPlacementError):
-                                    pass
-                                except Exception:
-                                    logger.exception("on_market_update error (stream continues)")
+
+                                if equity > 0:
+                                    try:
+                                        self._engine.on_market_update(
+                                            candles_list, live_bar, equity,
+                                        )
+                                    except (CancelFailureError, NewStopPlacementError):
+                                        pass
+                                    except Exception:
+                                        logger.exception("on_market_update error (stream continues)")
 
                                 now = time.monotonic()
                                 if now - self._last_live_insight_ts >= _LIVE_INSIGHT_INTERVAL_S:
