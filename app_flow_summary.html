@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>BFAT v2 앱 흐름 요약</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0f1318;
+      --panel: #171d24;
+      --panel-2: #1d2530;
+      --line: #2d3846;
+      --text: #edf3f8;
+      --muted: #9eadbc;
+      --accent: #49c7b8;
+      --warn: #e5b85c;
+      --bad: #ef6f6c;
+      --good: #68d391;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Pretendard, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.65;
+    }
+    header {
+      border-bottom: 1px solid var(--line);
+      background: #121820;
+      padding: 34px 28px 26px;
+    }
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 28px;
+    }
+    h1, h2, h3 { line-height: 1.2; margin: 0; }
+    h1 { font-size: clamp(28px, 4vw, 44px); letter-spacing: 0; }
+    h2 { margin-top: 34px; margin-bottom: 14px; font-size: 24px; }
+    h3 { margin-bottom: 10px; font-size: 17px; color: var(--accent); }
+    p { margin: 8px 0 0; }
+    code {
+      padding: 2px 6px;
+      border-radius: 6px;
+      background: #0c1015;
+      color: #d7f9f4;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 0.92em;
+    }
+    .sub {
+      max-width: 900px;
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 16px;
+    }
+    .grid {
+      display: grid;
+      gap: 14px;
+    }
+    .cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 18px;
+    }
+    .soft { background: var(--panel-2); }
+    .tag {
+      display: inline-block;
+      margin: 0 8px 8px 0;
+      padding: 4px 9px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .tag.good { color: var(--good); border-color: rgba(104, 211, 145, .35); }
+    .tag.warn { color: var(--warn); border-color: rgba(229, 184, 92, .35); }
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(150px, 1fr));
+      gap: 10px;
+      align-items: stretch;
+      margin-top: 14px;
+    }
+    .step {
+      position: relative;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 14px;
+      min-height: 116px;
+    }
+    .step::after {
+      content: ">";
+      position: absolute;
+      top: 42%;
+      right: -10px;
+      color: var(--accent);
+      font-weight: 700;
+    }
+    .step:last-child::after { content: ""; }
+    .num {
+      display: inline-flex;
+      width: 24px;
+      height: 24px;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      background: rgba(73, 199, 184, .16);
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    ul { margin: 8px 0 0; padding-left: 20px; }
+    li { margin: 6px 0; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 10px 12px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { color: var(--accent); background: #141b23; font-weight: 650; }
+    tr:last-child td { border-bottom: 0; }
+    .note {
+      border-left: 4px solid var(--warn);
+      background: rgba(229, 184, 92, .09);
+      padding: 12px 14px;
+      border-radius: 6px;
+      color: #f4dfb0;
+    }
+    .ok {
+      border-left: 4px solid var(--good);
+      background: rgba(104, 211, 145, .08);
+      padding: 12px 14px;
+      border-radius: 6px;
+      color: #c5f3d2;
+    }
+    @media (max-width: 900px) {
+      .cols-2, .cols-3, .flow { grid-template-columns: 1fr; }
+      .step::after { display: none; }
+      main, header { padding-left: 18px; padding-right: 18px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>BFAT v2 앱 전체 흐름 요약</h1>
+    <p class="sub">
+      이 문서는 현재 저장소의 활성 코드인 <code>backend/</code>와 <code>frontend/</code>를 기준으로 정리했습니다.
+      <code>_legacy/</code>, <code>BACKUP/</code>, <code>v1/</code>은 이전 버전 또는 참고 코드로 보입니다.
+    </p>
+    <p>
+      <span class="tag good">FastAPI 백엔드</span>
+      <span class="tag good">React + Vite 프론트엔드</span>
+      <span class="tag">Binance Futures REST/WebSocket</span>
+      <span class="tag">SQLite 기본 DB</span>
+      <span class="tag warn">자동매매/실계좌 가능</span>
+    </p>
+  </header>
+
+  <main>
+    <section>
+      <h2>1. 한 줄 요약</h2>
+      <div class="card soft">
+        사용자가 로그인 후 대시보드에서 엔진을 시작하면, 백엔드가 Binance 15분봉 시장 스트림과 계정 주문 스트림을 연결하고,
+        전략 엔진이 캔들을 평가해 진입/청산 신호를 만들며, 리스크 계산과 상태머신 검증을 거쳐 Binance Futures 주문을 실행합니다.
+        결과와 상태는 DB, REST API, WebSocket을 통해 프론트 화면에 반영됩니다.
+      </div>
+    </section>
+
+    <section>
+      <h2>2. 최상위 흐름</h2>
+      <div class="flow">
+        <div class="step">
+          <span class="num">1</span>
+          <h3>로그인</h3>
+          <p><code>/api/login</code>으로 access token과 refresh cookie를 받습니다.</p>
+        </div>
+        <div class="step">
+          <span class="num">2</span>
+          <h3>대시보드</h3>
+          <p>REST로 지표를 조회하고 <code>/ws/status</code>로 상태를 실시간 수신합니다.</p>
+        </div>
+        <div class="step">
+          <span class="num">3</span>
+          <h3>엔진 시작</h3>
+          <p><code>/api/start</code>가 <code>EngineService.start()</code>를 호출합니다.</p>
+        </div>
+        <div class="step">
+          <span class="num">4</span>
+          <h3>시장/계정 스트림</h3>
+          <p>15분봉 kline과 사용자 주문 체결 이벤트를 Binance WebSocket에서 받습니다.</p>
+        </div>
+        <div class="step">
+          <span class="num">5</span>
+          <h3>주문/기록/표시</h3>
+          <p>진입, SL, TP, 청산, 거래 로그, 수익률, 상태 진단이 화면에 표시됩니다.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>3. 주요 폴더와 역할</h2>
+      <div class="grid cols-2">
+        <div class="card">
+          <h3>백엔드</h3>
+          <ul>
+            <li><code>backend/main.py</code>: FastAPI 앱 진입점, CORS, 라우터 등록, lifespan 초기화.</li>
+            <li><code>backend/services/engine_service.py</code>: 엔진 생성, 시작/정지, Binance 스트림 관리, 상태 API 데이터 조립.</li>
+            <li><code>backend/app/core/engine/engine.py</code>: BFAT 엔진 오케스트레이터. 전략, 리스크, 주문, 상태머신, DB 저장을 연결.</li>
+            <li><code>backend/api/*.py</code>: 인증, 엔진 제어, 상태, 계좌, 로그 라우트.</li>
+            <li><code>backend/app/domain/</code>: 포지션, 시그널, 상태머신, 전략 판단 도메인 모델.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>프론트엔드</h3>
+          <ul>
+            <li><code>frontend/src/App.tsx</code>: 인증 상태에 따라 로그인 페이지 또는 대시보드 표시.</li>
+            <li><code>frontend/src/context/AuthContext.tsx</code>: 로그인, 토큰 갱신, 로그아웃 상태 관리.</li>
+            <li><code>frontend/src/components/Dashboard.tsx</code>: 탭, 상태 WebSocket, 엔진 시작/정지, 주요 카드 렌더링.</li>
+            <li><code>frontend/src/components/InsightTab.tsx</code>: 전략/시장 국면/진입 조건 표시.</li>
+            <li><code>frontend/src/components/TradesTab.tsx</code>: 거래 이력과 성과 요약 표시.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>4. 백엔드 시작 흐름</h2>
+      <div class="card">
+        <ol>
+          <li><code>Settings()</code>가 <code>backend/.env</code>, 루트 <code>.env</code>, 현재 작업 디렉터리 <code>.env</code> 중 하나에서 설정을 읽습니다.</li>
+          <li><code>DatabaseFactory.init_tables()</code>가 <code>migrations/</code>의 SQL을 실행해 <code>trade_log</code>, <code>equity_log</code>, <code>system_log</code> 등을 준비합니다.</li>
+          <li><code>BinanceAccountClient</code>가 API 키 설정 여부를 확인합니다. 키가 없으면 계좌/주문 관련 API는 제한됩니다.</li>
+          <li><code>EngineService</code>가 앱 상태에 등록됩니다. 실제 BFAT 엔진은 사용자가 Start를 누를 때 생성됩니다.</li>
+          <li>종료 시 <code>engine_service.stop()</code>과 DB close가 호출됩니다.</li>
+        </ol>
+      </div>
+    </section>
+
+    <section>
+      <h2>5. 엔진 Start 후 자동매매 루프</h2>
+      <div class="grid cols-3">
+        <div class="card">
+          <h3>엔진 구성</h3>
+          <p><code>EngineService._build_engine()</code>가 다음 의존성을 묶어 <code>BFATEngine</code>을 만듭니다.</p>
+          <ul>
+            <li><code>StrategyEngine</code></li>
+            <li><code>RiskManager</code></li>
+            <li><code>KillSwitch</code></li>
+            <li><code>BinanceExecutionClient</code></li>
+            <li><code>StateMachine</code></li>
+            <li>거래/자산/시스템 로그 저장소</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>시장 데이터</h3>
+          <p><code>BinanceMarketStream</code>은 시작 시 REST로 초기 15분봉을 가져오고, 이후 kline WebSocket을 구독합니다.</p>
+          <ul>
+            <li>닫힌 캔들: <code>on_candle_close()</code></li>
+            <li>진행 중 캔들: <code>on_market_update()</code></li>
+            <li>Insight 갱신: 실시간/주기 REST 보정</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>계정 이벤트</h3>
+          <p><code>BinanceUserStream</code>은 listen key를 만들고 주문 체결 이벤트를 수신합니다.</p>
+          <ul>
+            <li>reduceOnly 체결 감지</li>
+            <li>SL/TP/수동 청산 체결 반영</li>
+            <li>listen key keepalive</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>6. 전략 판단 흐름</h2>
+      <div class="card">
+        <p>
+          <code>StrategyEngine</code>은 시장 국면을 먼저 분류한 뒤, 국면에 맞는 전략 하나만 활성화합니다.
+        </p>
+        <table>
+          <thead>
+            <tr><th>국면</th><th>사용 전략</th><th>동작</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>TRENDING</code></td>
+              <td><code>BreakoutStrategy</code></td>
+              <td>EMA, ATR, 거래량, 방향성 조건을 바탕으로 추세 돌파 진입을 평가합니다.</td>
+            </tr>
+            <tr>
+              <td><code>RANGING</code></td>
+              <td><code>RangeStrategy</code></td>
+              <td>범위 상단/하단/중앙, RSI, volume z-score를 이용하며 진행 중 캔들에서도 진입을 평가합니다.</td>
+            </tr>
+            <tr>
+              <td>국면 전환</td>
+              <td>Close-first 정책</td>
+              <td>포지션이 열려 있으면 새 진입보다 기존 포지션 청산을 먼저 요청합니다.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>7. 주문과 리스크 흐름</h2>
+      <div class="grid cols-2">
+        <div class="card">
+          <h3>진입</h3>
+          <ul>
+            <li>신호 발생 시 상태머신이 <code>FLAT -> ENTERING</code>으로 이동합니다.</li>
+            <li><code>RiskManager</code>는 기본 2.5% 리스크 기준으로 포지션 수량을 계산합니다.</li>
+            <li>Binance 시장가 주문이 체결되면 실제 체결가와 수량을 검증합니다.</li>
+            <li>SL과 TP 조건부 주문을 등록하고 확인한 뒤 <code>OPEN</code> 상태가 됩니다.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>보호 주문</h3>
+          <ul>
+            <li>SL은 ATR 기반 가격이 잘못된 방향이면 실제 진입가 기준으로 재계산합니다.</li>
+            <li>TP는 현재 시장가 기준 즉시 발동 위험이 있으면 안전한 바깥 가격으로 repricing합니다.</li>
+            <li>SL/TP가 누락되면 재등록을 시도하고, SL 복구 실패는 포지션 flatten으로 이어질 수 있습니다.</li>
+            <li>1R scale-out과 breakeven 이동 기능이 설정값으로 켜져 있습니다.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>8. 상태머신</h2>
+      <div class="card">
+        <p>상태머신은 부작용 없이 포지션 수명주기만 검증합니다. 주문 실행과 DB 저장은 엔진 쪽에서 처리합니다.</p>
+        <p><code>FLAT -> ENTERING -> OPEN -> CLOSING -> FLAT</code></p>
+        <ul>
+          <li><code>on_signal()</code>: 신호 수신, 진입 대기.</li>
+          <li><code>on_entry_filled()</code>: 실제 진입 체결 후 포지션 열림.</li>
+          <li><code>on_stop_update()</code>: 손절가는 유리한 방향으로만 이동 가능.</li>
+          <li><code>on_exit_requested()</code>, <code>on_exit_filled()</code>: 청산 처리 후 FLAT 복귀.</li>
+          <li><code>restore_position()</code>: 앱 시작 시 Binance에 이미 열려 있는 포지션을 복원할 때 사용.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section>
+      <h2>9. 프론트 화면 흐름</h2>
+      <div class="grid cols-2">
+        <div class="card">
+          <h3>인증</h3>
+          <ul>
+            <li>앱 로딩 시 <code>/api/refresh</code>로 기존 refresh cookie를 확인합니다.</li>
+            <li>로그인 성공 시 access token을 메모리에 저장합니다.</li>
+            <li>25분마다 access token을 갱신합니다.</li>
+            <li>API가 401을 반환하면 자동 refresh 후 재시도합니다.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>대시보드</h3>
+          <ul>
+            <li><code>/ws/status?token=...</code>으로 엔진 상태를 3초 간격 수신합니다.</li>
+            <li><code>/api/insight</code>는 15초 또는 60초 주기로 탭별 조회됩니다.</li>
+            <li><code>/api/equity</code>는 30초마다 계좌 equity fallback을 조회합니다.</li>
+            <li>탭: Dashboard, Insight, Trades, Logs, Chart.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>10. 주요 API</h2>
+      <table>
+        <thead>
+          <tr><th>Method</th><th>Path</th><th>역할</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>POST</td><td><code>/api/login</code></td><td>관리자 로그인, access/refresh token 발급.</td></tr>
+          <tr><td>POST</td><td><code>/api/refresh</code></td><td>refresh cookie로 access token 재발급.</td></tr>
+          <tr><td>POST</td><td><code>/api/start</code></td><td>엔진 백그라운드 실행 시작.</td></tr>
+          <tr><td>POST</td><td><code>/api/stop</code></td><td>엔진과 스트림 정지.</td></tr>
+          <tr><td>GET</td><td><code>/api/status</code></td><td>엔진 상태, 포지션, SL/TP, PnL, 진단 정보.</td></tr>
+          <tr><td>GET</td><td><code>/api/insight</code></td><td>시장 국면, 전략 판단 근거, 진입 조건.</td></tr>
+          <tr><td>GET</td><td><code>/api/trades</code></td><td>닫힌 거래 이력.</td></tr>
+          <tr><td>GET</td><td><code>/api/trades/summary</code></td><td>승률, 평균 R, 기대값, 순손익, MDD.</td></tr>
+          <tr><td>GET</td><td><code>/api/logs</code></td><td>DB에 저장된 시스템 로그.</td></tr>
+          <tr><td>WS</td><td><code>/ws/status</code></td><td>대시보드 실시간 상태 스트림.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>11. 데이터 저장 흐름</h2>
+      <div class="card">
+        <ul>
+          <li><code>trade_log</code>: 진입/청산 가격, 수량, PnL, R multiple, 초기 손절가, trade hash, 검증 상태.</li>
+          <li><code>equity_log</code>: 시점별 equity 기록.</li>
+          <li><code>system_log</code>: 엔진 시작/정지, 주문 복구, 오류, R 검증 문제 등 운영 로그.</li>
+        </ul>
+        <p>거래가 닫히면 <code>BFATEngine.on_position_closed()</code>가 R multiple을 계산하고, kill switch를 갱신한 뒤 DB에 저장합니다.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>12. 운영상 주의점</h2>
+      <div class="note">
+        <ul>
+          <li><code>BINANCE_TESTNET=false</code>이면 실제 선물 계좌 주문이 나갈 수 있습니다.</li>
+          <li><code>APP_USERNAME</code>, <code>APP_PASSWORD</code>, <code>JWT_SECRET</code>, Binance API 키는 반드시 <code>.env</code>에서 설정해야 합니다.</li>
+          <li>README/SETUP과 일부 프론트 문구에 문자 인코딩이 깨진 흔적이 있습니다. 기능 흐름과 별개로 사용자 화면 문구 정리는 필요해 보입니다.</li>
+          <li>Chart 탭은 TradingView 외부 스크립트를 로드하므로 네트워크 또는 CSP 환경에 영향을 받습니다.</li>
+          <li>엔진은 스트림 재연결과 SL/TP 복구 로직을 갖고 있지만, 자동매매 앱 특성상 실계좌 전에는 testnet과 소액 검증이 필수입니다.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section>
+      <h2>13. 빠른 실행 기준</h2>
+      <div class="ok">
+        <p>백엔드: <code>./start_backend.sh</code> 또는 <code>cd backend && uvicorn main:app --host 0.0.0.0 --port 8000</code></p>
+        <p>프론트엔드: <code>cd frontend && npm install && npm run dev</code></p>
+        <p>개발 서버 기준 포트는 백엔드 <code>8000</code>, 프론트엔드 <code>5173</code>입니다.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>14. 이번 수정 반영 사항</h2>
+      <div class="grid cols-2">
+        <div class="card">
+          <h3>TP/SL 주문 안정화</h3>
+          <ul>
+            <li>시장가 주문에 <code>newOrderRespType=RESULT</code>를 추가해 엔진이 기대하는 <code>FILLED</code>, <code>executedQty</code>, <code>avgPrice</code> 응답을 받도록 했습니다.</li>
+            <li>SL/TP 조건부 주문은 기존 <code>/fapi/v1/algoOrder</code> 실패 시 <code>/fapi/v1/order</code>의 <code>STOP_MARKET</code>, <code>TAKE_PROFIT_MARKET</code>으로 fallback합니다.</li>
+            <li>청산/flatten 주문은 반대 방향 일반 시장가가 아니라 <code>reduceOnly</code> 시장가로 실행합니다.</li>
+            <li>신호에 TP가 없어도 엔진이 ATR 기반 TP를 반드시 생성합니다. TP 등록 실패 시 포지션을 유지하지 않고 fail-closed 처리합니다.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>전략/리스크 파라미터 명확화</h3>
+          <ul>
+            <li><code>backend/app/config/constants.py</code>에 전략/리스크 상수를 모았습니다.</li>
+            <li>기본 리스크는 거래당 <code>1%</code>로 낮췄습니다.</li>
+            <li>추세 전략은 <code>EMA 12/50</code>, <code>ATR 14</code>, <code>SL 1.8 ATR</code>, <code>TP 3.6 ATR</code> 기준입니다.</li>
+            <li>Range 전략은 범위 바깥 손절 buffer를 <code>max(가격의 0.6%, 0.7 ATR)</code>로 계산하고, 최소 보상/위험 비율은 <code>1.10</code>으로 올렸습니다.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

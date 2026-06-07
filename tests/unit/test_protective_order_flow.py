@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app.core.execution.binance_client import (
+    BinanceExecutionClient,
     BinanceOrderError,
     _classify_error,
     _PERMANENT_ERROR_CODES,
@@ -44,6 +45,64 @@ class TestBinanceOrderErrorClassification:
         assert err.retryable
 
 
+class TestBinanceExecutionProtectiveFallback:
+    def _client(self):
+        client = BinanceExecutionClient("key", "secret")
+        client.format_quantity = MagicMock(return_value=0.01)
+        client.format_price = MagicMock(side_effect=lambda _s, p, **_kw: round(p, 2))
+        return client
+
+    def test_market_order_requests_result_response(self):
+        client = self._client()
+        client._post_order = MagicMock(return_value={
+            "status": "FILLED",
+            "executedQty": "0.01",
+            "avgPrice": "100.0",
+            "orderId": "1",
+        })
+
+        client.place_market_order("BTCUSDT", Side.LONG, 0.01, "cid")
+
+        params = client._post_order.call_args.args[0]
+        assert params["type"] == "MARKET"
+        assert params["newOrderRespType"] == "RESULT"
+
+    def test_stop_order_falls_back_to_classic_order(self):
+        client = self._client()
+        client._post_algo_order = MagicMock(side_effect=RuntimeError("algo unsupported"))
+        client._post_order = MagicMock(return_value={"orderId": "42", "status": "NEW"})
+
+        resp = client.place_stop_market_order("BTCUSDT", Side.LONG, 0.01, 98.0, "cid")
+
+        params = client._post_order.call_args.args[0]
+        assert resp["orderId"] == "42"
+        assert params["type"] == "STOP_MARKET"
+        assert params["stopPrice"] == "98"
+        assert params["reduceOnly"] == "true"
+
+    def test_tp_order_falls_back_to_classic_order(self):
+        client = self._client()
+        client._post_algo_order = MagicMock(side_effect=RuntimeError("algo unsupported"))
+        client._post_order = MagicMock(return_value={"orderId": "43", "status": "NEW"})
+
+        resp = client.place_take_profit_market_order("BTCUSDT", Side.LONG, 0.01, 105.0, "cid")
+
+        params = client._post_order.call_args.args[0]
+        assert resp["orderId"] == "43"
+        assert params["type"] == "TAKE_PROFIT_MARKET"
+        assert params["stopPrice"] == "105"
+        assert params["reduceOnly"] == "true"
+
+    def test_verify_checks_classic_open_orders_after_algo_failure(self):
+        client = self._client()
+        client.get_open_algo_orders = MagicMock(side_effect=RuntimeError("algo unsupported"))
+        client.get_open_orders = MagicMock(return_value=[
+            {"orderId": "42", "status": "NEW", "type": "STOP_MARKET"},
+        ])
+
+        assert client.verify_algo_order_active("BTCUSDT", "42") is True
+
+
 # ────────────────────────────────────────────────────────────
 # Helpers
 # ────────────────────────────────────────────────────────────
@@ -73,6 +132,7 @@ def _make_engine(
             "orderId": "12345",
         }
     exec_client.place_market_order.return_value = market_order_resp
+    exec_client.place_reduce_only_market_order.return_value = market_order_resp
 
     if sl_place_ok:
         exec_client.place_stop_market_order.return_value = {"orderId": "SL_1", "algoId": "SL_1"}
@@ -186,8 +246,8 @@ class TestEntryFailClosed:
         assert engine._current_stop_order_id is not None
         assert engine._current_tp_algo_id is not None
 
-    def test_entry_without_tp_succeeds(self):
-        """When signal has no take_profit, entry should succeed without TP."""
+    def test_entry_without_tp_uses_atr_default_tp(self):
+        """When signal has no take_profit, engine must create and place a default TP."""
         engine, exec_client, sm = _make_engine()
         sig = _signal(take_profit=None)
         candles = [{"close": 100, "high": 101, "low": 99, "open": 100}] * 20
@@ -197,8 +257,10 @@ class TestEntryFailClosed:
 
         assert sm.state == PositionState.OPEN
         assert engine._sl_verified is True
-        assert engine._current_tp_algo_id is None
-        assert engine._tp_status == "none"
+        assert engine._current_tp_algo_id is not None
+        assert engine._current_take_profit is not None
+        assert engine._current_take_profit > 100.0
+        assert engine._tp_status == "exchange"
 
 
 # ────────────────────────────────────────────────────────────

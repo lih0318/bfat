@@ -12,21 +12,26 @@ Two evaluation modes:
 
 from typing import Any, Optional
 
+from app.config.constants import StrategyConstants
 from app.domain.enums import Side
 from app.domain.signal import Signal
 
 
 # ─── Fixed parameters ──────────────────────────────────────────────
-RANGE_LOOKBACK = 48
-RSI_PERIOD = 14
-ENTRY_THRESHOLD = 0.0025
-STOP_BUFFER = 0.004
-RSI_LONG = 38
-RSI_SHORT = 62
-VOLUME_LOOKBACK = 20
-MIN_REWARD_RISK = 0.7  # intrabar: reject entry if reward/risk < this
+RANGE_LOOKBACK = StrategyConstants.RANGE_LOOKBACK
+RSI_PERIOD = StrategyConstants.RANGE_RSI_PERIOD
+ATR_PERIOD = StrategyConstants.ATR_PERIOD
+ENTRY_THRESHOLD = StrategyConstants.RANGE_ENTRY_THRESHOLD
+STOP_BUFFER = StrategyConstants.RANGE_STOP_BUFFER_PCT
+STOP_ATR_MULTIPLIER = StrategyConstants.RANGE_STOP_ATR_MULTIPLIER
+RSI_LONG = StrategyConstants.RANGE_RSI_LONG
+RSI_SHORT = StrategyConstants.RANGE_RSI_SHORT
+VOLUME_LOOKBACK = StrategyConstants.RANGE_VOLUME_LOOKBACK
+MIN_REWARD_RISK = StrategyConstants.RANGE_MIN_REWARD_RISK
 
-MINIMUM_CANDLES = max(RANGE_LOOKBACK + 1, RSI_PERIOD + 1, VOLUME_LOOKBACK + 1)
+MINIMUM_CANDLES = max(
+    RANGE_LOOKBACK + 1, RSI_PERIOD + 1, ATR_PERIOD + 1, VOLUME_LOOKBACK + 1,
+)
 
 
 # ─── Indicators ────────────────────────────────────────────────────
@@ -69,6 +74,24 @@ def _volume_zscore(candles: list[dict], period: int = VOLUME_LOOKBACK) -> Option
     return (current - mean) / std
 
 
+def _atr_value(candles: list[dict], period: int = ATR_PERIOD) -> Optional[float]:
+    """Average True Range for the latest closed candle."""
+    if len(candles) < period + 1:
+        return None
+    tr_list: list[float] = [0.0]
+    for i in range(1, len(candles)):
+        high = candles[i]["high"]
+        low = candles[i]["low"]
+        prev_close = candles[i - 1]["close"]
+        tr_list.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
+    return sum(tr_list[-period:]) / period
+
+
+def _range_stop_buffer(close: float, atr_value: float) -> float:
+    """Use the wider of a fixed percent and ATR fraction for range stops."""
+    return max(close * STOP_BUFFER, atr_value * STOP_ATR_MULTIPLIER)
+
+
 # ─── Strategy ──────────────────────────────────────────────────────
 
 class RangeStrategy:
@@ -94,7 +117,7 @@ class RangeStrategy:
         if ctx is not None:
             self._store_evaluation(
                 ctx["range_high"], ctx["range_low"], ctx["range_mid"],
-                ctx["rsi"], ctx["vol_z"], candles[-1]["close"],
+                ctx["atr"], ctx["rsi"], ctx["vol_z"], candles[-1]["close"],
                 [], entry_conditions=[],
             )
 
@@ -113,12 +136,16 @@ class RangeStrategy:
         range_low = min(c["low"] for c in prev_bars)
         range_mid = (range_high + range_low) / 2.0
         rsi = _rsi(candles, RSI_PERIOD)
+        atr = _atr_value(candles, ATR_PERIOD)
         vol_z = _volume_zscore(candles, VOLUME_LOOKBACK)
+        if atr is None or atr <= 0:
+            return None
         result = {
             "range_high": range_high,
             "range_low": range_low,
             "range_mid": range_mid,
             "rsi": rsi,
+            "atr": atr,
             "vol_z": vol_z,
         }
         self._cached_range = {"range_high": range_high, "range_low": range_low, "range_mid": range_mid}
@@ -176,6 +203,7 @@ class RangeStrategy:
         range_high: float,
         range_low: float,
         range_mid: float,
+        atr_value: float,
         rsi_value: Optional[float],
         vol_z: Optional[float],
         close_price: float,
@@ -187,6 +215,7 @@ class RangeStrategy:
             "range_high": round(range_high, 4),
             "range_low": round(range_low, 4),
             "range_mid": round(range_mid, 4),
+            "atr_value": round(atr_value, 4),
             "rsi": round(rsi_value, 4) if rsi_value is not None else None,
             "volume_zscore": round(vol_z, 4) if vol_z is not None else None,
             "close_price": round(close_price, 4),
@@ -212,6 +241,7 @@ class RangeStrategy:
         range_low = ctx["range_low"]
         range_mid = ctx["range_mid"]
         rsi = ctx["rsi"]
+        atr = ctx["atr"]
         vol_z = ctx["vol_z"]
 
         cur = candles[-1]
@@ -227,8 +257,9 @@ class RangeStrategy:
         rsi_str = f"{rsi:.2f}" if rsi is not None else "N/A"
         vol_z_str = f"{vol_z:.2f}" if vol_z is not None else "N/A"
 
-        stop_long = range_low * (1 - STOP_BUFFER)
-        stop_short = range_high * (1 + STOP_BUFFER)
+        stop_buffer = _range_stop_buffer(close, atr)
+        stop_long = range_low - stop_buffer
+        stop_short = range_high + stop_buffer
 
         if long_signal:
             stop = stop_long
@@ -244,7 +275,7 @@ class RangeStrategy:
                 "met": rr_ok,
             })
             self._store_evaluation(
-                range_high, range_low, range_mid, rsi, vol_z, close,
+                range_high, range_low, range_mid, atr, rsi, vol_z, close,
                 [
                     f"Range [{range_low:.2f} – {range_high:.2f}]",
                     f"Range bounce LONG: low {low:.2f}, RSI {rsi_str}, vol_z {vol_z_str}",
@@ -276,7 +307,7 @@ class RangeStrategy:
                 "met": rr_ok,
             })
             self._store_evaluation(
-                range_high, range_low, range_mid, rsi, vol_z, close,
+                range_high, range_low, range_mid, atr, rsi, vol_z, close,
                 [
                     f"Range [{range_low:.2f} – {range_high:.2f}]",
                     f"Range bounce SHORT: high {high:.2f}, RSI {rsi_str}, vol_z {vol_z_str}",
@@ -312,7 +343,7 @@ class RangeStrategy:
         if not vol_quiet:
             reasoning.append(f"Volume Z-score {vol_z_str} >= 1.0 (need < 1.0, no spike)")
         self._store_evaluation(
-            range_high, range_low, range_mid, rsi, vol_z, close, reasoning,
+            range_high, range_low, range_mid, atr, rsi, vol_z, close, reasoning,
             entry_conditions=entry_conds,
         )
         return None
@@ -334,6 +365,7 @@ class RangeStrategy:
         range_low = ctx["range_low"]
         range_mid = ctx["range_mid"]
         rsi = ctx["rsi"]
+        atr = ctx["atr"]
         vol_z = ctx["vol_z"]
 
         high = live_bar["high"]
@@ -344,8 +376,9 @@ class RangeStrategy:
             high, low, close, range_high, range_low, range_mid, rsi, vol_z,
         )
 
-        stop_long = range_low * (1 - STOP_BUFFER)
-        stop_short = range_high * (1 + STOP_BUFFER)
+        stop_buffer = _range_stop_buffer(close, atr)
+        stop_long = range_low - stop_buffer
+        stop_short = range_high + stop_buffer
         if long_signal:
             rr_ok = self._passes_min_rr(Side.LONG, close, stop_long, range_mid)
             risk_l = abs(close - stop_long)
@@ -376,7 +409,7 @@ class RangeStrategy:
             f"Live: close {close:.2f}, RSI {rsi_str}, vol_z {vol_z_str}",
         ]
         self._store_evaluation(
-            range_high, range_low, range_mid, rsi, vol_z, close, reasoning,
+            range_high, range_low, range_mid, atr, rsi, vol_z, close, reasoning,
             entry_conditions=entry_conds,
         )
 
@@ -403,6 +436,7 @@ class RangeStrategy:
         range_low = ctx["range_low"]
         range_mid = ctx["range_mid"]
         rsi = ctx["rsi"]
+        atr = ctx["atr"]
         vol_z = ctx["vol_z"]
 
         high = live_bar["high"]
@@ -413,9 +447,10 @@ class RangeStrategy:
         long_signal, short_signal, _ = self._check_entry_conditions(
             high, low, close, range_high, range_low, range_mid, rsi, vol_z,
         )
+        stop_buffer = _range_stop_buffer(close, atr)
 
         if long_signal:
-            stop = range_low * (1 - STOP_BUFFER)
+            stop = range_low - stop_buffer
             tp = range_mid
             if not self._passes_min_rr(Side.LONG, close, stop, tp):
                 return None
@@ -429,7 +464,7 @@ class RangeStrategy:
             )
 
         if short_signal:
-            stop = range_high * (1 + STOP_BUFFER)
+            stop = range_high + stop_buffer
             tp = range_mid
             if not self._passes_min_rr(Side.SHORT, close, stop, tp):
                 return None

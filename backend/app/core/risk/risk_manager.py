@@ -1,12 +1,13 @@
 """Position sizing and R-multiple calculation."""
 
+from app.config.constants import RiskConstants
 from app.domain.enums import Side
 
 
 class RiskManager:
     """Fixed risk position sizing."""
 
-    def __init__(self, risk_percent: float = 0.025) -> None:
+    def __init__(self, risk_percent: float = RiskConstants.RISK_PERCENT) -> None:
         if not 0 < risk_percent < 1:
             raise ValueError("risk_percent must be between 0 and 1")
         self._risk_percent = risk_percent

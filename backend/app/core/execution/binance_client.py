@@ -291,6 +291,7 @@ class BinanceExecutionClient:
             "side": _side_to_binance(side, for_reduce_only=False),
             "type": "MARKET",
             "quantity": quantity,
+            "newOrderRespType": "RESULT",
             "newClientOrderId": client_order_id,
         }
         return self._post_order(params)
@@ -314,6 +315,7 @@ class BinanceExecutionClient:
             "type": "MARKET",
             "quantity": quantity,
             "reduceOnly": "true",
+            "newOrderRespType": "RESULT",
             "newClientOrderId": client_order_id,
         }
         return self._post_order(params)
@@ -387,6 +389,49 @@ class BinanceExecutionClient:
         except Exception as e:
             logger.warning("[SL_ALGO_CLOSE_POSITION_FAILED] %s", e)
 
+        # Attempt 3: classic Futures conditional order + quantity + reduceOnly.
+        try:
+            classic_id = _generate_client_order_id("bfat_sl_order")
+            params3: dict[str, Any] = {
+                "symbol": symbol,
+                "side": binance_side,
+                "type": "STOP_MARKET",
+                "stopPrice": trigger_str,
+                "quantity": qty_str,
+                "reduceOnly": "true",
+                "workingType": "CONTRACT_PRICE",
+                "positionSide": "BOTH",
+                "newClientOrderId": classic_id[:36],
+            }
+            resp = self._post_order(params3)
+            if isinstance(resp, dict) and resp.get("orderId"):
+                logger.info("[SL_PLACED_CLASSIC_REDUCE] orderId=%s trigger=%s qty=%s",
+                            resp["orderId"], trigger_str, qty_str)
+                return resp
+        except Exception as e:
+            logger.warning("[SL_CLASSIC_REDUCE_FAILED] %s", e)
+
+        # Attempt 4: classic Futures conditional order + closePosition.
+        try:
+            classic_cp_id = _generate_client_order_id("bfat_sl_order_cp")
+            params4: dict[str, Any] = {
+                "symbol": symbol,
+                "side": binance_side,
+                "type": "STOP_MARKET",
+                "stopPrice": trigger_str,
+                "closePosition": "true",
+                "workingType": "CONTRACT_PRICE",
+                "positionSide": "BOTH",
+                "newClientOrderId": classic_cp_id[:36],
+            }
+            resp = self._post_order(params4)
+            if isinstance(resp, dict) and resp.get("orderId"):
+                logger.info("[SL_PLACED_CLASSIC_CLOSE_POS] orderId=%s trigger=%s",
+                            resp["orderId"], trigger_str)
+                return resp
+        except Exception as e:
+            logger.warning("[SL_CLASSIC_CLOSE_POSITION_FAILED] %s", e)
+
         raise RuntimeError(
             f"SL placement failed all methods for {symbol} trigger={trigger_str}"
         )
@@ -459,6 +504,49 @@ class BinanceExecutionClient:
                 return self._normalize_algo_response(resp)
         except Exception as e:
             logger.warning("[TP_ALGO_CLOSE_POSITION_FAILED] %s", e)
+
+        # Attempt 3: classic Futures conditional order + quantity + reduceOnly.
+        try:
+            classic_id = _generate_client_order_id("bfat_tp_order")
+            params3: dict[str, Any] = {
+                "symbol": symbol,
+                "side": binance_side,
+                "type": "TAKE_PROFIT_MARKET",
+                "stopPrice": trigger_str,
+                "quantity": qty_str,
+                "reduceOnly": "true",
+                "workingType": "CONTRACT_PRICE",
+                "positionSide": "BOTH",
+                "newClientOrderId": classic_id[:36],
+            }
+            resp = self._post_order(params3)
+            if isinstance(resp, dict) and resp.get("orderId"):
+                logger.info("[TP_PLACED_CLASSIC_REDUCE] orderId=%s trigger=%s qty=%s",
+                            resp["orderId"], trigger_str, qty_str)
+                return resp
+        except Exception as e:
+            logger.warning("[TP_CLASSIC_REDUCE_FAILED] %s", e)
+
+        # Attempt 4: classic Futures conditional order + closePosition.
+        try:
+            classic_cp_id = _generate_client_order_id("bfat_tp_order_cp")
+            params4: dict[str, Any] = {
+                "symbol": symbol,
+                "side": binance_side,
+                "type": "TAKE_PROFIT_MARKET",
+                "stopPrice": trigger_str,
+                "closePosition": "true",
+                "workingType": "CONTRACT_PRICE",
+                "positionSide": "BOTH",
+                "newClientOrderId": classic_cp_id[:36],
+            }
+            resp = self._post_order(params4)
+            if isinstance(resp, dict) and resp.get("orderId"):
+                logger.info("[TP_PLACED_CLASSIC_CLOSE_POS] orderId=%s trigger=%s",
+                            resp["orderId"], trigger_str)
+                return resp
+        except Exception as e:
+            logger.warning("[TP_CLASSIC_CLOSE_POSITION_FAILED] %s", e)
 
         raise RuntimeError(
             f"TP placement failed all methods for {symbol} trigger={trigger_str}"
@@ -553,16 +641,39 @@ class BinanceExecutionClient:
     def verify_algo_order_active(self, symbol: str, algo_order_id: str) -> bool:
         """Check if an algo order is live (NEW) on the exchange.
 
-        Returns False only when the order list was successfully retrieved
-        but the order was not found or not in NEW status. Raises on API failure
-        so callers can distinguish 'order gone' from 'network error'.
+        Also checks classic openOrders because protective orders may fall back
+        from /algoOrder to /order. Returns False only when at least one order
+        list was successfully retrieved and the order was not found or not NEW.
         """
-        orders = self.get_open_algo_orders(symbol)
-        for o in orders:
-            aid = o.get("algoId")
-            if aid is not None and str(aid) == str(algo_order_id):
-                status = o.get("algoStatus") or o.get("status")
-                return status == "NEW"
+        last_err: Exception | None = None
+        had_successful_query = False
+        try:
+            orders = self.get_open_algo_orders(symbol)
+            had_successful_query = True
+            for o in orders:
+                aid = o.get("algoId")
+                if aid is not None and str(aid) == str(algo_order_id):
+                    status = o.get("algoStatus") or o.get("status")
+                    return status == "NEW"
+        except Exception as e:
+            last_err = e
+
+        try:
+            classic_orders = self.get_open_orders(symbol)
+            had_successful_query = True
+            for o in classic_orders:
+                oid = o.get("orderId")
+                cid = o.get("clientOrderId") or o.get("origClientOrderId")
+                if str(oid) == str(algo_order_id) or str(cid) == str(algo_order_id):
+                    status = o.get("status")
+                    return status == "NEW"
+        except Exception as e:
+            last_err = e
+
+        if had_successful_query:
+            return False
+        if last_err is not None:
+            raise last_err
         return False
 
     _VERIFY_BACKOFF_DELAYS = (0.5, 1.0, 2.0)
@@ -600,17 +711,35 @@ class BinanceExecutionClient:
         return False
 
     def cancel_all_algo_orders(self, symbol: str) -> int:
-        """Cancel all CONDITIONAL algo orders for symbol. Returns count cancelled."""
+        """Cancel all protective conditional orders for symbol. Returns count cancelled."""
         cancelled = 0
-        for o in self.get_open_algo_orders(symbol):
-            aid = o.get("algoId")
-            if aid is None:
-                continue
-            try:
-                self.cancel_order(symbol, str(aid))
-                cancelled += 1
-            except Exception:
-                pass
+        try:
+            for o in self.get_open_algo_orders(symbol):
+                aid = o.get("algoId")
+                if aid is None:
+                    continue
+                try:
+                    self.cancel_order(symbol, str(aid))
+                    cancelled += 1
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
+            for o in self.get_open_orders(symbol):
+                order_type = o.get("type") or o.get("origType")
+                if order_type not in ("STOP_MARKET", "TAKE_PROFIT_MARKET", "STOP"):
+                    continue
+                oid = o.get("orderId")
+                if oid is None:
+                    continue
+                try:
+                    self.cancel_order(symbol, str(oid))
+                    cancelled += 1
+                except Exception:
+                    pass
+        except Exception:
+            pass
         return cancelled
 
     def get_user_trades(self, symbol: str, limit: int = 20) -> list[dict]:

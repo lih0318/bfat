@@ -1,0 +1,8 @@
+# Coding Rules
+
+- kiss yagni dry
+- Enforce deterministic logic.
+- Require explicit architecture plan before coding.
+- Require risk analysis before modifying trading logic.
+- Require unit test generation before implementation.
+- Require post-implementation review.

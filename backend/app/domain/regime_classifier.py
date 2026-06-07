@@ -6,19 +6,21 @@ Hysteresis prevents whipsaw regime changes.
 
 from typing import Optional
 
+from app.config.constants import StrategyConstants
+
 # ─── Fixed thresholds (to avoid overfitting) ───────────────────────
-ADX_THRESHOLD = 22
-BB_WIDTH_PCT_THRESHOLD = 65
-STRUCTURE_RATIO_THRESHOLD = 0.6
-TRENDING_CONFIRM_BARS = 3
-RANGING_CONFIRM_BARS = 5
+ADX_THRESHOLD = StrategyConstants.REGIME_ADX_THRESHOLD
+BB_WIDTH_PCT_THRESHOLD = StrategyConstants.REGIME_BB_WIDTH_PCT_THRESHOLD
+STRUCTURE_RATIO_THRESHOLD = StrategyConstants.REGIME_STRUCTURE_RATIO_THRESHOLD
+TRENDING_CONFIRM_BARS = StrategyConstants.REGIME_TRENDING_CONFIRM_BARS
+RANGING_CONFIRM_BARS = StrategyConstants.REGIME_RANGING_CONFIRM_BARS
 
 # ─── Indicator parameters ──────────────────────────────────────────
-ADX_PERIOD = 14
-BB_PERIOD = 20
-BB_NUM_STD = 2.0
-BB_WIDTH_LOOKBACK = 100
-STRUCTURE_LOOKBACK = 20
+ADX_PERIOD = StrategyConstants.REGIME_ADX_PERIOD
+BB_PERIOD = StrategyConstants.REGIME_BB_PERIOD
+BB_NUM_STD = StrategyConstants.REGIME_BB_NUM_STD
+BB_WIDTH_LOOKBACK = StrategyConstants.REGIME_BB_WIDTH_LOOKBACK
+STRUCTURE_LOOKBACK = StrategyConstants.REGIME_STRUCTURE_LOOKBACK
 MINIMUM_CANDLES = 100  # max(100, 20, 14+1)
 
 

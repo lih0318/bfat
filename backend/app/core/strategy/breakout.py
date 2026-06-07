@@ -7,6 +7,7 @@ Filtered by overextension guard and minimum volume ratio.
 
 from typing import Any, Optional
 
+from app.config.constants import StrategyConstants
 from app.domain.enums import Side
 from app.domain.signal import Signal
 
@@ -68,15 +69,15 @@ def _last_n_candles_movement(candles: list[dict], n: int) -> float:
 class BreakoutStrategy:
     """15m EMA crossover trend-following strategy with overextension filter."""
 
-    EMA_FAST_PERIOD = 12
-    EMA_SLOW_PERIOD = 50
-    VOLUME_LOOKBACK = 20
-    VOLUME_RATIO_THRESHOLD = 1.0
-    OVEREXTENSION_LOOKBACK = 10
-    ATR_PERIOD = 14
-    ATR_OVEREXTENSION = 2.5
-    SL_ATR_MULTIPLIER = 1.6
-    TP_ATR_MULTIPLIER = 2.8  # R:R ≈ 1:1.75 (balanced for BTC 15m volatility)
+    EMA_FAST_PERIOD = StrategyConstants.TREND_EMA_FAST_PERIOD
+    EMA_SLOW_PERIOD = StrategyConstants.TREND_EMA_SLOW_PERIOD
+    VOLUME_LOOKBACK = StrategyConstants.TREND_VOLUME_LOOKBACK
+    VOLUME_RATIO_THRESHOLD = StrategyConstants.TREND_VOLUME_RATIO_THRESHOLD
+    OVEREXTENSION_LOOKBACK = StrategyConstants.TREND_OVEREXTENSION_LOOKBACK
+    ATR_PERIOD = StrategyConstants.ATR_PERIOD
+    ATR_OVEREXTENSION = StrategyConstants.TREND_ATR_OVEREXTENSION
+    SL_ATR_MULTIPLIER = StrategyConstants.TREND_SL_ATR_MULTIPLIER
+    TP_ATR_MULTIPLIER = StrategyConstants.TREND_TP_ATR_MULTIPLIER
 
     def __init__(self, symbol: str = "BTCUSDT") -> None:
         self._symbol = symbol

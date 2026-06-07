@@ -7,6 +7,7 @@ from datetime import datetime
 from decimal import Decimal, getcontext
 from typing import Any
 
+from app.config.constants import StrategyConstants
 from app.core.execution import BinanceExecutionClient, _generate_client_order_id
 
 logger = logging.getLogger(__name__)
@@ -95,9 +96,8 @@ def _close_position_flatten(
     size: float,
 ) -> None:
     """Place market order to flatten. Validates FILLED, executedQty>=size, avgPrice>0."""
-    close_side = Side.SHORT if side == Side.LONG else Side.LONG
-    resp = execution.place_market_order(
-        symbol, close_side, size, _generate_client_order_id("bfat_flatten")
+    resp = execution.place_reduce_only_market_order(
+        symbol, side, size, _generate_client_order_id("bfat_flatten")
     )
     resp = _validate_response_dict(resp)
     _validate_market_response(resp)
@@ -113,8 +113,9 @@ def _close_position_flatten(
         raise RuntimeError("CRITICAL FLATTEN FAILURE: avgPrice <= 0")
 
 
-ATR_PERIOD = 14
-INITIAL_STOP_ATR = 1.6
+ATR_PERIOD = StrategyConstants.ATR_PERIOD
+INITIAL_STOP_ATR = StrategyConstants.PROTECTIVE_SL_ATR_MULTIPLIER
+TAKE_PROFIT_ATR = StrategyConstants.PROTECTIVE_TP_ATR_MULTIPLIER
 
 
 def _atr(candles: list[dict], period: int = 14) -> float:
@@ -162,7 +163,7 @@ def _validate_stop_price(
     return actual_entry_price * (1 + FALLBACK_STOP_PCT)
 
 
-_TP_BUFFER_TICKS = 5  # minimum tick-size buffer between market price and TP
+_TP_BUFFER_TICKS = StrategyConstants.TP_BUFFER_TICKS
 
 
 def _validate_take_profit_price(
@@ -183,7 +184,7 @@ def _reprice_tp_outside_market(
     current_market_price: float,
     atr_val: float,
     tick_size: float,
-    tp_atr_mult: float = 2.8,
+    tp_atr_mult: float = TAKE_PROFIT_ATR,
 ) -> float:
     """Compute a TP safely outside the current market price.
 
@@ -198,6 +199,48 @@ def _reprice_tp_outside_market(
     atr_tp = actual_entry_price - tp_atr_mult * atr_val if atr_val > 0 else 0
     market_tp = current_market_price - buffer
     return min(atr_tp, market_tp) if atr_tp > 0 else market_tp
+
+
+def _default_stop_price(side: Side, entry_price: float, atr_val: float) -> float:
+    """ATR-based default SL. Raises if ATR is not usable."""
+    if atr_val <= 0:
+        raise RuntimeError("ATR invalid for default stop")
+    if side == Side.LONG:
+        return entry_price - INITIAL_STOP_ATR * atr_val
+    return entry_price + INITIAL_STOP_ATR * atr_val
+
+
+def _default_take_profit_price(side: Side, entry_price: float, atr_val: float) -> float:
+    """ATR-based default TP. Raises if ATR is not usable."""
+    if atr_val <= 0:
+        raise RuntimeError("ATR invalid for default take profit")
+    if side == Side.LONG:
+        return entry_price + TAKE_PROFIT_ATR * atr_val
+    return entry_price - TAKE_PROFIT_ATR * atr_val
+
+
+def _resolve_stop_price(
+    side: Side,
+    strategy_stop: float | None,
+    entry_price: float,
+    atr_val: float,
+) -> float:
+    """Use strategy SL if present, otherwise mandatory ATR-based SL."""
+    if strategy_stop is not None and float(strategy_stop) > 0:
+        return float(strategy_stop)
+    return _default_stop_price(side, entry_price, atr_val)
+
+
+def _resolve_take_profit_price(
+    side: Side,
+    strategy_take_profit: float | None,
+    entry_price: float,
+    atr_val: float,
+) -> float:
+    """Use strategy TP if present, otherwise mandatory ATR-based TP."""
+    if strategy_take_profit is not None and float(strategy_take_profit) > 0:
+        return float(strategy_take_profit)
+    return _default_take_profit_price(side, entry_price, atr_val)
 
 
 def _ts() -> str:
@@ -773,17 +816,16 @@ class BFATEngine:
         atr_val = _atr(candles, ATR_PERIOD)
         entry_price_est = live_bar["close"]
 
-        if signal.stop_price is not None:
-            stop_price_est = signal.stop_price
-        else:
-            if atr_val <= 0:
-                self._last_skip_reason = "atr_invalid"
-                return
-            stop_price_est = (
-                entry_price_est - INITIAL_STOP_ATR * atr_val
-                if signal.side == Side.LONG
-                else entry_price_est + INITIAL_STOP_ATR * atr_val
+        try:
+            stop_price_est = _resolve_stop_price(
+                signal.side, signal.stop_price, entry_price_est, atr_val,
             )
+            _resolve_take_profit_price(
+                signal.side, signal.take_profit, entry_price_est, atr_val,
+            )
+        except RuntimeError:
+            self._last_skip_reason = "atr_invalid"
+            return
         position_size = self._risk_manager.calculate_position_size(
             equity, entry_price_est, stop_price_est,
         )
@@ -814,10 +856,8 @@ class BFATEngine:
                 self._state_machine.rollback_entry()
                 raise RuntimeError("Intrabar entry response invalid; flattened") from e
 
-            stop_price = signal.stop_price if signal.stop_price is not None else (
-                actual_entry_price - INITIAL_STOP_ATR * atr_val
-                if signal.side == Side.LONG
-                else actual_entry_price + INITIAL_STOP_ATR * atr_val
+            stop_price = _resolve_stop_price(
+                signal.side, signal.stop_price, actual_entry_price, atr_val,
             )
             stop_price = _validate_stop_price(signal.side, stop_price, actual_entry_price, atr_val)
             try:
@@ -833,28 +873,26 @@ class BFATEngine:
                 raise RuntimeError("Stop failed after intrabar entry; flattened") from e
 
             tp_algo_id: str | None = None
-            final_tp = signal.take_profit
-            if signal.take_profit is not None and float(signal.take_profit) > 0:
+            final_tp = _resolve_take_profit_price(
+                signal.side, signal.take_profit, actual_entry_price, atr_val,
+            )
+            try:
+                tp_algo_id, final_tp = self._validate_and_place_tp(
+                    signal.side, actual_size, final_tp,
+                    actual_entry_price, atr_val,
+                    fail_closed=True,
+                )
+            except Exception as e:
+                logger.error("[TP_FAIL_CLOSED_INTRABAR] err=%s; cancelling SL and flattening", e)
                 try:
-                    tp_algo_id, final_tp = self._validate_and_place_tp(
-                        signal.side, actual_size, float(signal.take_profit),
-                        actual_entry_price, atr_val,
-                        fail_closed=True,
-                    )
-                except Exception as e:
-                    logger.error("[TP_FAIL_CLOSED_INTRABAR] err=%s; cancelling SL and flattening", e)
-                    try:
-                        self._execution.cancel_order(self._symbol, self._current_stop_order_id)
-                    except Exception:
-                        pass
-                    self._current_stop_order_id = None
-                    self._sl_verified = False
-                    _close_position_flatten(self._execution, self._symbol, signal.side, actual_size)
-                    self._state_machine.rollback_entry()
-                    raise RuntimeError("TP failed on intrabar entry (fail-closed); flattened") from e
-            else:
-                self._tp_status = "none"
-                self._tp_last_error = None
+                    self._execution.cancel_order(self._symbol, self._current_stop_order_id)
+                except Exception:
+                    pass
+                self._current_stop_order_id = None
+                self._sl_verified = False
+                _close_position_flatten(self._execution, self._symbol, signal.side, actual_size)
+                self._state_machine.rollback_entry()
+                raise RuntimeError("TP failed on intrabar entry (fail-closed); flattened") from e
 
             position = Position(
                 symbol=self._symbol,
@@ -1023,17 +1061,16 @@ class BFATEngine:
             atr_val = _atr(candles, ATR_PERIOD)
             entry_price_est = candles[-1]["close"]
 
-            if signal.stop_price is not None:
-                stop_price_est = signal.stop_price
-            else:
-                if atr_val <= 0:
-                    self._last_skip_reason = "atr_invalid"
-                    return
-                stop_price_est = (
-                    entry_price_est - INITIAL_STOP_ATR * atr_val
-                    if signal.side == Side.LONG
-                    else entry_price_est + INITIAL_STOP_ATR * atr_val
+            try:
+                stop_price_est = _resolve_stop_price(
+                    signal.side, signal.stop_price, entry_price_est, atr_val,
                 )
+                _resolve_take_profit_price(
+                    signal.side, signal.take_profit, entry_price_est, atr_val,
+                )
+            except RuntimeError:
+                self._last_skip_reason = "atr_invalid"
+                return
             position_size = self._risk_manager.calculate_position_size(
                 equity, entry_price_est, stop_price_est
             )
@@ -1073,14 +1110,9 @@ class BFATEngine:
                     self._state_machine.rollback_entry()
                     raise RuntimeError("Entry market response invalid; position flattened") from e
 
-                if signal.stop_price is not None:
-                    stop_price = signal.stop_price
-                else:
-                    stop_price = (
-                        actual_entry_price - INITIAL_STOP_ATR * atr_val
-                        if signal.side == Side.LONG
-                        else actual_entry_price + INITIAL_STOP_ATR * atr_val
-                    )
+                stop_price = _resolve_stop_price(
+                    signal.side, signal.stop_price, actual_entry_price, atr_val,
+                )
                 stop_price = _validate_stop_price(signal.side, stop_price, actual_entry_price, atr_val)
                 try:
                     sl_order_id, stop_price = self._place_stop_with_retry(
@@ -1101,30 +1133,28 @@ class BFATEngine:
                         "Stop order failed after entry filled; position flattened"
                     ) from e
                 tp_algo_id: str | None = None
-                final_tp = signal.take_profit
-                if signal.take_profit is not None and float(signal.take_profit) > 0:
+                final_tp = _resolve_take_profit_price(
+                    signal.side, signal.take_profit, actual_entry_price, atr_val,
+                )
+                try:
+                    tp_algo_id, final_tp = self._validate_and_place_tp(
+                        signal.side, actual_size, final_tp,
+                        actual_entry_price, atr_val,
+                        fail_closed=True,
+                    )
+                except Exception as e:
+                    logger.error("[TP_FAIL_CLOSED_ON_ENTRY] err=%s; cancelling SL and flattening", e)
                     try:
-                        tp_algo_id, final_tp = self._validate_and_place_tp(
-                            signal.side, actual_size, float(signal.take_profit),
-                            actual_entry_price, atr_val,
-                            fail_closed=True,
-                        )
-                    except Exception as e:
-                        logger.error("[TP_FAIL_CLOSED_ON_ENTRY] err=%s; cancelling SL and flattening", e)
-                        try:
-                            self._execution.cancel_order(self._symbol, self._current_stop_order_id)
-                        except Exception:
-                            pass
-                        self._current_stop_order_id = None
-                        self._sl_verified = False
-                        _close_position_flatten(
-                            self._execution, self._symbol, signal.side, actual_size,
-                        )
-                        self._state_machine.rollback_entry()
-                        raise RuntimeError("TP failed on entry (fail-closed); position flattened") from e
-                else:
-                    self._tp_status = "none"
-                    self._tp_last_error = None
+                        self._execution.cancel_order(self._symbol, self._current_stop_order_id)
+                    except Exception:
+                        pass
+                    self._current_stop_order_id = None
+                    self._sl_verified = False
+                    _close_position_flatten(
+                        self._execution, self._symbol, signal.side, actual_size,
+                    )
+                    self._state_machine.rollback_entry()
+                    raise RuntimeError("TP failed on entry (fail-closed); position flattened") from e
                 position = Position(
                     symbol=self._symbol,
                     side=signal.side,
@@ -1277,7 +1307,7 @@ class BFATEngine:
                     if range_mid is not None and range_mid > 0:
                         tp_price = range_mid
                 elif active_regime == "TRENDING":
-                    _TP_ATR_MULT = 2.8
+                    _TP_ATR_MULT = TAKE_PROFIT_ATR
                     if pos.side == Side.LONG:
                         tp_price = pos.entry_price + _TP_ATR_MULT * atr_val
                     else:
@@ -1411,10 +1441,9 @@ class BFATEngine:
             self._current_stop_order_id = None
 
         # ── Place close market order ──
-        close_side = Side.SHORT if pos.side == Side.LONG else Side.LONG
-        resp = self._execution.place_market_order(
+        resp = self._execution.place_reduce_only_market_order(
             self._symbol,
-            close_side,
+            pos.side,
             pos.size,
             _generate_client_order_id("bfat_market_close"),
         )

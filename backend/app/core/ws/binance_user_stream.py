@@ -29,8 +29,9 @@ def _parse_order_trade_update(msg: dict, expected_symbol: str | None = None) -> 
         return None
     if o.get("X") != "FILLED":
         return None
-    reduce_only = o.get("R") or o.get("r")
-    if not reduce_only:
+    reduce_only = bool(o.get("R") or o.get("r"))
+    close_all = bool(o.get("cp"))
+    if not (reduce_only or close_all):
         return None
     cid = str(o.get("c", ""))
     symbol_in_msg = str(o.get("s", ""))
