@@ -8,6 +8,7 @@ from typing import Any, Optional
 
 import requests
 
+from app.config.constants import StrategyConstants
 from app.config.settings import Settings
 from app.core.database import DatabaseFactory
 from app.core.engine import BFATEngine
@@ -82,6 +83,9 @@ class EngineService:
         self._equity_ts: float = 0.0
         self._live_pos_cache: dict[str, Any] | None = None
         self._live_pos_ts: float = 0.0
+        self._strategy_mode: str = self._normalize_strategy_mode(
+            self._settings.bfat_strategy_mode,
+        )
         rest_base = (
             BINANCE_REST_TESTNET
             if self._settings.binance_testnet
@@ -111,7 +115,10 @@ class EngineService:
         kill_switch = KillSwitch()
         risk_manager = RiskManager()
         state_machine = StateMachine()
-        strategy_engine = StrategyEngine(symbol=self._settings.bfat_symbol)
+        strategy_engine = StrategyEngine(
+            symbol=self._settings.bfat_symbol,
+            strategy_mode=self._strategy_mode,
+        )
         notifier = TelegramNotifier(
             bot_token=self._settings.telegram_bot_token,
             chat_id=self._settings.telegram_chat_id,
@@ -276,6 +283,7 @@ class EngineService:
                 stopped_unrealized = live_pos.get("unrealized_pnl")
             return {
                 "engine_state": "stopped",
+                "strategy_mode": self._strategy_mode,
                 "position": live_pos,
                 "last_signal": None,
                 "current_stop_price": live_stop if live_stop > 0 else None,
@@ -394,6 +402,7 @@ class EngineService:
 
         return {
             "engine_state": sm.state.value,
+            "strategy_mode": self._strategy_mode,
             "position": pos_dict,
             "last_signal": last_signal,
             "current_stop_price": (
@@ -860,6 +869,31 @@ class EngineService:
         """Return current status."""
         return self._get_status()
 
+    @staticmethod
+    def _normalize_strategy_mode(mode: str) -> str:
+        mode = str(mode or "TRENDING").upper()
+        if mode not in StrategyConstants.STRATEGY_PRESETS:
+            return "TRENDING"
+        return mode
+
+    @property
+    def is_running(self) -> bool:
+        return self._running
+
+    def get_strategy_config(self) -> dict[str, Any]:
+        return {
+            "mode": self._strategy_mode,
+            "running": self._running,
+            "can_update": not self._running,
+            "presets": StrategyConstants.STRATEGY_PRESETS,
+        }
+
+    def set_strategy_mode(self, mode: str) -> dict[str, Any]:
+        if self._running:
+            raise RuntimeError("Strategy mode can only be changed while engine is stopped")
+        self._strategy_mode = self._normalize_strategy_mode(mode)
+        return self.get_strategy_config()
+
     def _get_trade_repo(self):
         if self._engine is not None:
             repo = getattr(self._engine, "_trade_repo", None)
@@ -1020,6 +1054,7 @@ class EngineService:
         """Return last strategy evaluation + regime classifier data for insight API."""
         default: dict[str, Any] = {
             "regime": "Unknown",
+            "strategy_mode": self._strategy_mode,
             "active_strategy": "Unknown",
             "regime_changed": False,
             "volatility_score": 0.0,
@@ -1040,6 +1075,7 @@ class EngineService:
 
         result: dict[str, Any] = {
             "regime": details.get("regime", "Unknown"),
+            "strategy_mode": details.get("strategy_mode", self._strategy_mode),
             "active_strategy": details.get("active_strategy", "Unknown"),
             "regime_changed": details.get("regime_changed", False),
             "regime_score": details.get("regime_score", 0),

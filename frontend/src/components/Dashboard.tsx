@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { apiFetch } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import { ChartTab } from './ChartTab'
-import { ControlPanel } from './ControlPanel'
+import { ControlPanel, type StrategyConfig, type StrategyMode } from './ControlPanel'
 import { InsightTab } from './InsightTab'
 import { LogsPanel } from './LogsPanel'
 import { PositionCard, type PositionData } from './PositionCard'
@@ -80,6 +80,9 @@ export function Dashboard() {
   const [startLoading, setStartLoading] = useState(false)
   const [stopLoading, setStopLoading] = useState(false)
   const [controlError, setControlError] = useState<string | null>(null)
+  const [strategyConfig, setStrategyConfig] = useState<StrategyConfig | null>(null)
+  const [strategyLoading, setStrategyLoading] = useState(false)
+  const [strategyError, setStrategyError] = useState<string | null>(null)
 
   const wsUrl = useCallback(() => {
     const base = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/status`
@@ -132,6 +135,23 @@ export function Dashboard() {
     return () => { cancelled = true; clearInterval(interval) }
   }, [accessToken])
 
+  const fetchStrategyConfig = useCallback(async () => {
+    if (!accessToken) return
+    try {
+      const res = await apiFetch('/api/strategy/config', { token: accessToken })
+      if (!res.ok) return
+      const data: StrategyConfig = await res.json()
+      setStrategyConfig(data)
+      setStrategyError(null)
+    } catch {
+      setStrategyError('Strategy config unavailable')
+    }
+  }, [accessToken])
+
+  useEffect(() => {
+    fetchStrategyConfig()
+  }, [fetchStrategyConfig])
+
   useEffect(() => {
     if (!accessToken) return
     let cancelled = false
@@ -164,6 +184,7 @@ export function Dashboard() {
     try {
       const res = await apiFetch('/api/start', { method: 'POST', token: accessToken })
       if (!res.ok) { const err = await res.json().catch(() => ({})); const d = err.detail; setControlError(typeof d === 'string' ? d : (Array.isArray(d) && d[0]?.msg ? d[0].msg : null) ?? 'Start failed') }
+      else fetchStrategyConfig()
     } catch (e) { setControlError(e instanceof Error ? e.message : 'Start failed') }
     finally { setStartLoading(false) }
   }
@@ -173,8 +194,34 @@ export function Dashboard() {
     try {
       const res = await apiFetch('/api/stop', { method: 'POST', token: accessToken })
       if (!res.ok) { const err = await res.json().catch(() => ({})); const d = err.detail; setControlError(typeof d === 'string' ? d : (Array.isArray(d) && d[0]?.msg ? d[0].msg : null) ?? 'Stop failed') }
+      else fetchStrategyConfig()
     } catch (e) { setControlError(e instanceof Error ? e.message : 'Stop failed') }
     finally { setStopLoading(false) }
+  }
+
+  const handleStrategyModeChange = async (mode: StrategyMode) => {
+    if (!accessToken) return
+    setStrategyError(null)
+    setStrategyLoading(true)
+    try {
+      const res = await apiFetch('/api/strategy/config', {
+        method: 'PUT',
+        token: accessToken,
+        body: JSON.stringify({ mode }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        const detail = err.detail
+        setStrategyError(typeof detail === 'string' ? detail : 'Strategy update failed')
+        return
+      }
+      const data: StrategyConfig = await res.json()
+      setStrategyConfig(data)
+    } catch (e) {
+      setStrategyError(e instanceof Error ? e.message : 'Strategy update failed')
+    } finally {
+      setStrategyLoading(false)
+    }
   }
 
   const pos = status?.position as PositionData | null
@@ -356,8 +403,12 @@ export function Dashboard() {
               startLoading={startLoading}
               stopLoading={stopLoading}
               controlError={controlError}
+              strategyConfig={strategyConfig}
+              strategyLoading={strategyLoading}
+              strategyError={strategyError}
               onStart={handleStart}
               onStop={handleStop}
+              onStrategyModeChange={handleStrategyModeChange}
             />
 
             <div className="grid gap-5 lg:grid-cols-3">

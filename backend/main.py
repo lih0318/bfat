@@ -21,6 +21,7 @@ from api.auth_routes import router as auth_router
 from api.engine_routes import router as engine_router
 from api.log_routes import router as log_router
 from api.status_routes import router as status_router
+from api.strategy_routes import router as strategy_router
 from app.services.binance_account import BinanceAccountClient
 from services.engine_service import EngineService
 
@@ -80,6 +81,7 @@ app.include_router(account_router)
 app.include_router(engine_router)
 app.include_router(status_router)
 app.include_router(log_router)
+app.include_router(strategy_router)
 
 
 @app.get("/api/health")

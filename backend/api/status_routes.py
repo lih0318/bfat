@@ -10,6 +10,7 @@ router = APIRouter(prefix="/api", tags=["status"])
 def _default_status():
     return {
         "engine_state": "stopped",
+        "strategy_mode": "TRENDING",
         "position": None,
         "last_signal": None,
         "current_stop_price": None,
@@ -102,6 +103,7 @@ async def get_trade_summary(
 def _default_insight():
     return {
         "regime": "Unknown",
+        "strategy_mode": "TRENDING",
         "volatility_score": 0.0,
         "atr_value": 0.0,
         "volume_ratio": 0.0,

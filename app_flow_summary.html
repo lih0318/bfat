@@ -458,6 +458,30 @@
         </div>
       </div>
     </section>
+
+    <section>
+      <h2>15. 전략 프리셋 선택 기능</h2>
+      <div class="grid cols-2">
+        <div class="card">
+          <h3>Trend Market</h3>
+          <ul>
+            <li>상승세 또는 하락세가 뚜렷한 장에서 사용하는 추세추종 모드입니다.</li>
+            <li>기준 수치: <code>EMA 12/50</code>, <code>ATR 14</code>, <code>Volume ≥ 1.10x</code>.</li>
+            <li>보호 주문: <code>SL 1.8 ATR</code>, <code>TP 3.6 ATR</code>.</li>
+            <li>프론트의 <code>Strategy Preset</code>에서 <code>Trend Market</code>을 선택한 뒤 엔진을 시작합니다.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>Range Market</h3>
+          <ul>
+            <li>가격이 박스권에서 움직이는 횡보장에 사용하는 평균회귀 모드입니다.</li>
+            <li>기준 수치: <code>Range 48 bars</code>, <code>RSI 14</code>, <code>Long RSI &lt; 35</code>, <code>Short RSI &gt; 65</code>.</li>
+            <li>보호 주문: <code>Stop max(0.6%, 0.7 ATR)</code>, 최소 <code>RR ≥ 1.10</code>.</li>
+            <li>엔진 실행 중에는 모드 변경을 막고, 정지 상태에서만 변경할 수 있습니다.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
   </main>
 </body>
 </html>

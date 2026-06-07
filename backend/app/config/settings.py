@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     bfat_scaleout_enabled: bool = True
     bfat_scaleout_r_multiple: float = 1.0
     bfat_scaleout_fraction: float = 0.5
+    bfat_strategy_mode: str = "TRENDING"
     app_username: str = ""
     app_password: str = ""
     jwt_secret: str = "change-me-in-production"

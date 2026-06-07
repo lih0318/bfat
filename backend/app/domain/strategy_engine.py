@@ -69,10 +69,14 @@ class StrategyEngine:
     * `evaluate_ranging_intrabar` allows range entries inside a forming bar.
     """
 
-    def __init__(self, symbol: str = "BTCUSDT") -> None:
+    def __init__(self, symbol: str = "BTCUSDT", strategy_mode: str = "TRENDING") -> None:
         self.regime_classifier = RegimeClassifier()
         self.breakout_strategy = BreakoutStrategy(symbol)
         self.range_strategy = RangeStrategy(symbol)
+        mode = str(strategy_mode or "TRENDING").upper()
+        if mode not in ("TRENDING", "RANGING"):
+            mode = "TRENDING"
+        self._strategy_mode: str = mode
         self._active_regime: Optional[str] = None
         self._last_regime_changed: bool = False
         self._regime_switch_cooldown: int = 0
@@ -98,7 +102,8 @@ class StrategyEngine:
             None         – no action (cooldown, hold open, no entry signal)
         """
         self._last_skip_reason = None
-        regime = self.regime_classifier.evaluate(candles)
+        classified_regime = self.regime_classifier.evaluate(candles)
+        regime = self._strategy_mode or classified_regime
         rc_details = self.regime_classifier.get_last_details()
         score = rc_details.get("score", 0)
         self._last_trend_direction = rc_details.get("trend_direction", "neutral")
@@ -178,7 +183,8 @@ class StrategyEngine:
         depends on this path. Range metrics (High/Mid/Low) must stay fresh: run range
         first and isolate failures so a breakout error cannot block range updates.
         """
-        regime = self.regime_classifier.evaluate(candles)
+        classified_regime = self.regime_classifier.evaluate(candles)
+        regime = self._strategy_mode or classified_regime
         rc_details = self.regime_classifier.get_last_details()
         self._active_regime = regime
         self._last_score = rc_details.get("score", 0)
@@ -200,7 +206,8 @@ class StrategyEngine:
         Called on every forming-candle tick so Insight stays fresh even when a
         position is open and ``evaluate()`` skips entry logic.
         """
-        regime = self.regime_classifier.evaluate(candles)
+        classified_regime = self.regime_classifier.evaluate(candles)
+        regime = self._strategy_mode or classified_regime
         rc_details = self.regime_classifier.get_last_details()
         self._active_regime = regime
         self._last_score = rc_details.get("score", 0)
@@ -264,6 +271,7 @@ class StrategyEngine:
             details = {}
 
         details["regime"] = self._active_regime or "Unknown"
+        details["strategy_mode"] = self._strategy_mode
         details["active_strategy"] = (
             "Breakout" if self._active_regime == "TRENDING" else "Range"
         )

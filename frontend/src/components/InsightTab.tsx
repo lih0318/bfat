@@ -73,8 +73,9 @@ function useRelativeTime(epochSec: number | undefined): string {
   const [label, setLabel] = useState('')
   useEffect(() => {
     if (!epochSec) { setLabel(''); return }
+    const ts = epochSec
     function update() {
-      const delta = Math.max(0, Math.floor(Date.now() / 1000 - epochSec))
+      const delta = Math.max(0, Math.floor(Date.now() / 1000 - ts))
       if (delta < 5) setLabel('just now')
       else if (delta < 60) setLabel(`${delta}s ago`)
       else setLabel(`${Math.floor(delta / 60)}m ago`)
