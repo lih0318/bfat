@@ -12,6 +12,8 @@ export interface StrategyConfig {
   running: boolean
   can_update: boolean
   presets: Record<StrategyMode, StrategyPreset>
+  symbols?: string[]
+  max_concurrent_positions?: number
 }
 
 interface ControlPanelProps {
@@ -22,6 +24,9 @@ interface ControlPanelProps {
   strategyConfig: StrategyConfig | null
   strategyLoading: boolean
   strategyError: string | null
+  symbols?: string[]
+  openPositionCount?: number
+  maxConcurrentPositions?: number
   onStart: () => void
   onStop: () => void
   onStrategyModeChange: (mode: StrategyMode) => void
@@ -35,6 +40,9 @@ export function ControlPanel({
   strategyConfig,
   strategyLoading,
   strategyError,
+  symbols = [],
+  openPositionCount = 0,
+  maxConcurrentPositions,
   onStart,
   onStop,
   onStrategyModeChange,
@@ -59,6 +67,14 @@ export function ControlPanel({
           )}
           {controlError && (
             <p className="mt-1.5 text-sm text-[var(--negative)]">{controlError}</p>
+          )}
+          {symbols.length > 0 && (
+            <p className="mt-1.5 text-xs text-[var(--text-muted)]">
+              Symbols {symbols.join(', ')}
+              {maxConcurrentPositions != null && (
+                <span> &middot; Slots {openPositionCount}/{maxConcurrentPositions}</span>
+              )}
+            </p>
           )}
         </div>
         <div className="flex items-center gap-3">

@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     binance_api_secret: str = ""
     binance_testnet: bool = True
     bfat_symbol: str = "BTCUSDT"
+    bfat_symbols: str = ""
+    bfat_max_concurrent_positions: int = 2
     # 1R partial to breakeven: half (default) at 1R, move SL to entry tick, re-place TP for remainder
     bfat_scaleout_enabled: bool = True
     bfat_scaleout_r_multiple: float = 1.0

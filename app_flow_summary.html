@@ -482,6 +482,19 @@
         </div>
       </div>
     </section>
+    <section>
+      <h2>16. Multi-Symbol Trading Flow</h2>
+      <div class="card">
+        <ul>
+          <li><code>BFAT_SYMBOLS</code> controls the target universe. If it is empty, the app keeps using <code>BFAT_SYMBOL</code> only.</li>
+          <li><code>EngineService</code> creates one <code>BFATEngine</code>, one <code>StrategyEngine</code>, and one market stream per symbol.</li>
+          <li>Each symbol has its own state machine, position, SL/TP orders, cooldown, and strategy insight.</li>
+          <li>The Binance user stream is account-wide and routes reduce-only fills back to the matching symbol engine.</li>
+          <li><code>BFAT_MAX_CONCURRENT_POSITIONS</code> limits simultaneous symbol positions. When the limit is full, flat symbol engines skip fresh entries.</li>
+          <li><code>/api/status</code> keeps the legacy <code>position</code> field and also exposes <code>positions</code>, <code>symbol_statuses</code>, <code>symbols</code>, and slot counts.</li>
+        </ul>
+      </div>
+    </section>
   </main>
 </body>
 </html>

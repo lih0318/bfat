@@ -11,6 +11,11 @@ def _default_status():
     return {
         "engine_state": "stopped",
         "strategy_mode": "TRENDING",
+        "symbols": ["BTCUSDT"],
+        "max_concurrent_positions": 1,
+        "open_position_count": 0,
+        "positions": [],
+        "symbol_statuses": [],
         "position": None,
         "last_signal": None,
         "current_stop_price": None,
@@ -62,6 +67,7 @@ async def get_position(
 async def get_trades(
     request: Request,
     _: str = Depends(get_current_user),
+    symbol: str | None = None,
     limit: int = 50,
     offset: int = 0,
 ):
@@ -70,7 +76,6 @@ async def get_trades(
     if svc is None or not hasattr(svc, "get_trades"):
         return []
     try:
-        symbol = getattr(request.app.state.settings, "bfat_symbol", "BTCUSDT")
         return svc.get_trades(symbol=symbol, limit=limit, offset=offset)
     except Exception:
         return []
@@ -80,6 +85,7 @@ async def get_trades(
 async def get_trade_summary(
     request: Request,
     _: str = Depends(get_current_user),
+    symbol: str | None = None,
 ):
     """Return performance summary metrics computed from closed trades."""
     svc = getattr(request.app.state, "engine_service", None)
@@ -90,7 +96,6 @@ async def get_trade_summary(
             "max_drawdown_r": 0.0, "best_trade_r": 0.0, "worst_trade_r": 0.0,
         }
     try:
-        symbol = getattr(request.app.state.settings, "bfat_symbol", "BTCUSDT")
         return svc.get_trade_summary(symbol=symbol)
     except Exception:
         return {
@@ -117,12 +122,13 @@ def _default_insight():
 async def get_insight(
     request: Request,
     _: str = Depends(get_current_user),
+    symbol: str | None = None,
 ):
     """Return market regime and engine reasoning from last strategy evaluation."""
     svc = getattr(request.app.state, "engine_service", None)
     if svc is None or not hasattr(svc, "get_insight"):
         return _default_insight()
     try:
-        return svc.get_insight()
+        return svc.get_insight(symbol=symbol)
     except Exception:
         return _default_insight()

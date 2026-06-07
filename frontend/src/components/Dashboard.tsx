@@ -28,7 +28,12 @@ interface Diagnostics {
 
 interface StatusData {
   engine_state: string
-  position: Record<string, unknown> | null
+  symbols?: string[]
+  max_concurrent_positions?: number
+  open_position_count?: number
+  positions?: PositionData[]
+  symbol_statuses?: SymbolStatusData[]
+  position: PositionData | null
   last_signal: Record<string, string> | null
   current_stop_price: number | null
   take_profit: number | null
@@ -48,6 +53,26 @@ interface StatusData {
   post_close_cooldown: number
   error: string | null
   diagnostics?: Diagnostics
+}
+
+interface SymbolStatusData {
+  symbol: string
+  engine_state: string
+  position: PositionData | null
+  current_stop_price: number | null
+  take_profit: number | null
+  tp_protection_mode: 'exchange' | 'fallback' | 'none' | 'failed' | 'repriced'
+  tp_verified: boolean | null
+  tp_status: string | null
+  tp_error: string | null
+  sl_protection_mode: 'exchange' | 'recovering' | 'none'
+  sl_verified: boolean | null
+  r_multiple: number | null
+  r_validation_status: string | null
+  unrealized_pnl: number | null
+  total_realized_pnl: number | null
+  kill_switch_triggered: boolean
+  post_close_cooldown: number
 }
 
 interface InsightData {
@@ -224,7 +249,31 @@ export function Dashboard() {
     }
   }
 
-  const pos = status?.position as PositionData | null
+  const pos = status?.position ?? null
+  const symbols = status?.symbols ?? strategyConfig?.symbols ?? []
+  const symbolStatuses = status?.symbol_statuses ?? []
+  const openSymbolStatuses = symbolStatuses.filter((s) => s.position)
+  const positionCards = openSymbolStatuses.length > 0
+    ? openSymbolStatuses
+    : [{
+        symbol: pos?.symbol ?? symbols[0] ?? 'BTCUSDT',
+        engine_state: engineState,
+        position: pos,
+        current_stop_price: status?.current_stop_price ?? null,
+        take_profit: status?.take_profit ?? null,
+        tp_protection_mode: status?.tp_protection_mode ?? 'none',
+        tp_verified: status?.tp_verified ?? null,
+        tp_status: status?.tp_status ?? null,
+        tp_error: status?.tp_error ?? null,
+        sl_protection_mode: status?.sl_protection_mode ?? 'none',
+        sl_verified: status?.sl_verified ?? null,
+        r_multiple: status?.r_multiple ?? null,
+        r_validation_status: status?.r_validation_status ?? null,
+        unrealized_pnl: status?.unrealized_pnl ?? null,
+        total_realized_pnl: status?.total_realized_pnl ?? null,
+        kill_switch_triggered: status?.kill_switch_triggered ?? false,
+        post_close_cooldown: status?.post_close_cooldown ?? 0,
+      }]
   const rMultiple: number | null = status?.r_multiple != null ? Number(status.r_multiple) : null
 
   const displayEquity = typeof status?.equity === 'number' ? status.equity : typeof equityFallback === 'number' ? equityFallback : null
@@ -406,6 +455,9 @@ export function Dashboard() {
               strategyConfig={strategyConfig}
               strategyLoading={strategyLoading}
               strategyError={strategyError}
+              symbols={symbols}
+              openPositionCount={status?.open_position_count ?? openSymbolStatuses.length}
+              maxConcurrentPositions={status?.max_concurrent_positions ?? strategyConfig?.max_concurrent_positions}
               onStart={handleStart}
               onStop={handleStop}
               onStrategyModeChange={handleStrategyModeChange}
@@ -451,16 +503,19 @@ export function Dashboard() {
               </div>
 
               {/* Position Card */}
-              <div className="lg:col-span-2">
-                <PositionCard
-                  position={pos ?? null}
-                  currentStopPrice={status?.current_stop_price ?? null}
-                  takeProfit={status?.take_profit ?? null}
-                  tpProtectionMode={status?.tp_protection_mode ?? 'none'}
-                  slProtectionMode={status?.sl_protection_mode ?? 'none'}
-                  tpError={status?.tp_error ?? null}
-                  rMultiple={rMultiple}
-                />
+              <div className="space-y-4 lg:col-span-2">
+                {positionCards.map((item) => (
+                  <PositionCard
+                    key={item.position?.correlation_id ?? item.symbol}
+                    position={item.position ?? null}
+                    currentStopPrice={item.current_stop_price ?? null}
+                    takeProfit={item.take_profit ?? null}
+                    tpProtectionMode={item.tp_protection_mode ?? 'none'}
+                    slProtectionMode={item.sl_protection_mode ?? 'none'}
+                    tpError={item.tp_error ?? null}
+                    rMultiple={item.r_multiple != null ? Number(item.r_multiple) : rMultiple}
+                  />
+                ))}
               </div>
             </div>
 

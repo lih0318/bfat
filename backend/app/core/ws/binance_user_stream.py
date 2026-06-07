@@ -58,13 +58,15 @@ class BinanceUserStream:
         self,
         api_key: str,
         api_secret: str,
-        engine: Any,
+        engine: Any | None,
         equity_provider: Callable[[], float],
         testnet: bool = False,
+        engines: dict[str, Any] | None = None,
     ) -> None:
         self._api_key = api_key
         self._api_secret = api_secret
         self._engine = engine
+        self._engines = {k.upper(): v for k, v in (engines or {}).items()}
         self._equity_provider = equity_provider
         self._rest_base = BINANCE_REST_TESTNET if testnet else BINANCE_REST_MAINNET
         self._ws_base = BINANCE_WS_TESTNET if testnet else BINANCE_WS_MAINNET
@@ -91,6 +93,15 @@ class BinanceUserStream:
             "reconnect_count": self._reconnect_count,
             "current_backoff": self._current_backoff,
         }
+
+    def _engine_for_symbol(self, symbol: str) -> Any | None:
+        sym = str(symbol or "").upper()
+        if self._engines:
+            return self._engines.get(sym)
+        expected_symbol = getattr(self._engine, "_symbol", None)
+        if expected_symbol is None or str(expected_symbol).upper() == sym:
+            return self._engine
+        return None
 
     async def _keepalive_loop(self) -> None:
         """PUT listenKey every 30 minutes. Uses current _listen_key session."""
@@ -149,10 +160,13 @@ class BinanceUserStream:
                         self._last_message_ts = time.time()
                         try:
                             msg = json.loads(raw)
-                            expected_symbol = getattr(self._engine, "_symbol", None)
+                            expected_symbol = None if self._engines else getattr(self._engine, "_symbol", None)
                             result = _parse_order_trade_update(msg, expected_symbol=expected_symbol)
                             if result:
                                 exit_price, symbol_in_msg = result
+                                engine = self._engine_for_symbol(symbol_in_msg)
+                                if engine is None:
+                                    continue
                                 logger.info(
                                     "[REDUCE_ONLY_FILLED]",
                                     extra={"symbol": symbol_in_msg, "price": exit_price},
@@ -162,7 +176,7 @@ class BinanceUserStream:
                                 except Exception:
                                     equity = 0.0
                                 try:
-                                    self._engine.on_reduce_only_fill_from_stream(
+                                    engine.on_reduce_only_fill_from_stream(
                                         exit_price, equity,
                                     )
                                 except (CancelFailureError, NewStopPlacementError):

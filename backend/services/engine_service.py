@@ -77,12 +77,16 @@ class EngineService:
         self._task: Optional[asyncio.Task] = None
         self._engine: Optional[BFATEngine] = None
         self._market_stream: Optional[BinanceMarketStream] = None
+        self._engines: dict[str, BFATEngine] = {}
+        self._market_streams: dict[str, BinanceMarketStream] = {}
         self._user_stream: Optional[BinanceUserStream] = None
         self._critical_error: Optional[str] = None
         self._equity_value: float = 0.0
         self._equity_ts: float = 0.0
-        self._live_pos_cache: dict[str, Any] | None = None
-        self._live_pos_ts: float = 0.0
+        self._symbols = self._configured_symbols()
+        self._max_concurrent_positions = self._configured_max_concurrent_positions()
+        self._live_pos_cache: dict[str, dict[str, Any] | None] = {}
+        self._live_pos_ts: dict[str, float] = {}
         self._strategy_mode: str = self._normalize_strategy_mode(
             self._settings.bfat_strategy_mode,
         )
@@ -98,7 +102,35 @@ class EngineService:
             testnet=self._settings.binance_testnet,
         )
 
-    def _build_engine(self) -> BFATEngine:
+    def _configured_symbols(self) -> list[str]:
+        raw = self._settings.bfat_symbols or self._settings.bfat_symbol
+        tokens = raw.replace(";", ",").replace(" ", ",").split(",")
+        symbols: list[str] = []
+        seen: set[str] = set()
+        for token in tokens:
+            symbol = token.strip().upper()
+            if not symbol or symbol in seen:
+                continue
+            symbols.append(symbol)
+            seen.add(symbol)
+        if not symbols:
+            symbols.append(str(self._settings.bfat_symbol or "BTCUSDT").upper())
+        return symbols
+
+    def _configured_max_concurrent_positions(self) -> int:
+        raw = getattr(self._settings, "bfat_max_concurrent_positions", 2)
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            value = 2
+        value = max(1, value)
+        return min(value, max(1, len(self._symbols)))
+
+    @property
+    def symbols(self) -> list[str]:
+        return list(self._symbols)
+
+    def _build_engine(self, symbol: str) -> BFATEngine:
         """Construct engine with all dependencies."""
         trade_repo, equity_repo, system_log_repo = create_persistence(self._db)
         rest_base = (
@@ -116,7 +148,7 @@ class EngineService:
         risk_manager = RiskManager()
         state_machine = StateMachine()
         strategy_engine = StrategyEngine(
-            symbol=self._settings.bfat_symbol,
+            symbol=symbol,
             strategy_mode=self._strategy_mode,
         )
         notifier = TelegramNotifier(
@@ -133,7 +165,7 @@ class EngineService:
             trade_repository=trade_repo,
             equity_repository=equity_repo,
             system_log_repository=system_log_repo,
-            symbol=self._settings.bfat_symbol,
+            symbol=symbol,
             notifier=notifier,
             scaleout_enabled=self._settings.bfat_scaleout_enabled,
             scaleout_r_multiple=self._settings.bfat_scaleout_r_multiple,
@@ -161,21 +193,22 @@ class EngineService:
 
     _LIVE_POS_TTL = 30.0  # seconds — rate-limit Binance position queries
 
-    def _fetch_binance_position(self) -> dict[str, Any] | None:
+    def _fetch_binance_position(self, symbol: str | None = None) -> dict[str, Any] | None:
         """Query Binance for a live position. Cached for _LIVE_POS_TTL seconds.
 
         Uses positionRisk (get_position) for accurate entry_price; also queries
         Open Orders for STOP_MARKET to populate stop_price.
         """
+        symbol = (symbol or self._symbols[0]).upper()
         now = time.monotonic()
-        if now - self._live_pos_ts < self._LIVE_POS_TTL:
-            return self._live_pos_cache
+        if now - self._live_pos_ts.get(symbol, 0.0) < self._LIVE_POS_TTL:
+            return self._live_pos_cache.get(symbol)
         if not self._binance_account.is_configured():
             return None
         try:
-            symbol = self._settings.bfat_symbol
+            engine = self._engines.get(symbol)
             exec_client = (
-                self._engine._execution if self._engine else self._readonly_execution
+                engine._execution if engine else self._readonly_execution
             )
             pos_data = exec_client.get_position(symbol)
             result = None
@@ -210,8 +243,9 @@ class EngineService:
                         "take_profit": None,
                     }
             if result is not None:
+                engine = self._engines.get(symbol)
                 exec_client = (
-                    self._engine._execution if self._engine else self._readonly_execution
+                    engine._execution if engine else self._readonly_execution
                 )
                 try:
                     for ao in exec_client.get_open_algo_orders(symbol):
@@ -238,98 +272,134 @@ class EngineService:
                             break
                 except Exception as e:
                     logger.debug("Open orders fetch for SL failed: %s", e)
-            self._live_pos_cache = result
-            self._live_pos_ts = now
+            self._live_pos_cache[symbol] = result
+            self._live_pos_ts[symbol] = now
             return result
         except Exception as e:
             logger.debug("Binance live position fetch failed: %s", e)
-            return self._live_pos_cache
+            return self._live_pos_cache.get(symbol)
 
     _INSIGHT_STALE_THRESHOLD_S = 120.0  # 2 min without insight update → stale
 
     def _build_stream_diagnostics(self) -> dict[str, Any]:
         """Collect diagnostics from market and user streams."""
         now = time.time()
-        market = self._market_stream.get_diagnostics() if self._market_stream else None
+        market_streams = {
+            symbol: stream.get_diagnostics()
+            for symbol, stream in self._market_streams.items()
+        }
+        primary_symbol = self._symbols[0]
+        market = (
+            market_streams.get(primary_symbol)
+            if market_streams
+            else self._market_stream.get_diagnostics() if self._market_stream else None
+        )
         user = self._user_stream.get_diagnostics() if self._user_stream else None
 
         insight_ts: float = 0.0
-        if self._engine is not None:
-            se = getattr(self._engine, "_strategy_engine", None)
+        insight_by_symbol: dict[str, dict[str, Any]] = {}
+        engines = self._engines or ({primary_symbol: self._engine} if self._engine else {})
+        for symbol, engine in engines.items():
+            se = getattr(engine, "_strategy_engine", None)
             if se is not None:
-                insight_ts = getattr(se, "_last_insight_update_ts", 0.0)
+                ts = float(getattr(se, "_last_insight_update_ts", 0.0) or 0.0)
+                age = round(now - ts, 1) if ts > 0 else None
+                insight_by_symbol[symbol] = {
+                    "last_insight_update_ts": ts if ts > 0 else None,
+                    "insight_age_seconds": age,
+                    "insight_stale": age is not None and age > self._INSIGHT_STALE_THRESHOLD_S,
+                }
+                if symbol == primary_symbol:
+                    insight_ts = ts
+        if insight_ts <= 0 and insight_by_symbol:
+            first = next(iter(insight_by_symbol.values()))
+            insight_ts = float(first.get("last_insight_update_ts") or 0.0)
         insight_age = round(now - insight_ts, 1) if insight_ts > 0 else None
-        insight_stale = insight_age is not None and insight_age > self._INSIGHT_STALE_THRESHOLD_S
+        insight_stale = any(
+            bool(v.get("insight_stale")) for v in insight_by_symbol.values()
+        ) if insight_by_symbol else (
+            insight_age is not None and insight_age > self._INSIGHT_STALE_THRESHOLD_S
+        )
 
         return {
             "market_stream": market,
+            "market_streams": market_streams,
             "user_stream": user,
             "last_insight_update_ts": insight_ts if insight_ts > 0 else None,
             "insight_age_seconds": insight_age,
             "insight_stale": insight_stale,
+            "insights": insight_by_symbol,
         }
 
-    def _get_status(self) -> dict[str, Any]:
-        """Build status dict for API/WebSocket."""
+    @staticmethod
+    def _position_to_dict(pos: Position) -> dict[str, Any]:
+        return {
+            "symbol": pos.symbol,
+            "side": pos.side.value,
+            "size": pos.size,
+            "entry_price": pos.entry_price,
+            "stop_price": pos.stop_price,
+            "initial_stop_price": pos.initial_stop_price,
+            "stop_phase": pos.stop_phase.value,
+            "entry_time": pos.entry_time,
+            "correlation_id": pos.correlation_id,
+            "take_profit": pos.take_profit,
+        }
+
+    @staticmethod
+    def _engine_has_position(engine: BFATEngine | None) -> bool:
+        if engine is None:
+            return False
+        sm = getattr(engine, "_state_machine", None)
+        if sm is None:
+            return False
+        if getattr(sm, "position", None) is not None:
+            return True
+        state = getattr(getattr(sm, "state", None), "value", "flat")
+        return state in ("entering", "open", "closing")
+
+    def _open_position_count(self) -> int:
+        return sum(1 for engine in self._engines.values() if self._engine_has_position(engine))
+
+    def _equity_provider_for_symbol(self, symbol: str) -> float:
+        """Return equity, but block fresh entries when the global slot limit is full."""
         equity = self._equity_provider()
-        diagnostics = self._build_stream_diagnostics()
-        if self._engine is None:
-            live_pos = self._fetch_binance_position()
-            live_stop = live_pos.get("stop_price", 0) if live_pos else 0
-            live_tp = live_pos.get("take_profit") if live_pos else None
-            live_tp_f = float(live_tp) if live_tp not in (None, "") else None
-            stopped_unrealized = None
-            if live_pos is not None:
-                stopped_unrealized = live_pos.get("unrealized_pnl")
-            return {
-                "engine_state": "stopped",
-                "strategy_mode": self._strategy_mode,
-                "position": live_pos,
-                "last_signal": None,
-                "current_stop_price": live_stop if live_stop > 0 else None,
-                "take_profit": live_tp_f if live_tp_f and live_tp_f > 0 else None,
-                "tp_protection_mode": "none",
-                "tp_verified": None,
-                "tp_status": "none",
-                "tp_error": None,
-                "sl_protection_mode": "none",
-                "sl_verified": None,
-                "r_multiple": None,
-                "r_validation_status": None,
-                "system_health": "HEALTHY",
-                "equity": equity,
-                "unrealized_pnl": stopped_unrealized,
-                "total_realized_pnl": None,
-                "kill_switch_triggered": False,
-                "post_close_cooldown": 0,
-                "error": self._critical_error,
-                "diagnostics": diagnostics,
-            }
-        sm = self._engine._state_machine
-        pos = sm.position
-        pos_dict = None
-        if pos is not None:
-            pos_dict = {
-                "symbol": pos.symbol,
-                "side": pos.side.value,
-                "size": pos.size,
-                "entry_price": pos.entry_price,
-                "stop_price": pos.stop_price,
-                "initial_stop_price": pos.initial_stop_price,
-                "stop_phase": pos.stop_phase.value,
-                "entry_time": pos.entry_time,
-                "correlation_id": pos.correlation_id,
-                "take_profit": pos.take_profit,
-            }
+        engine = self._engines.get(symbol.upper())
+        if engine is not None and not self._engine_has_position(engine):
+            if self._open_position_count() >= self._max_concurrent_positions:
+                try:
+                    engine._last_skip_reason = "max_concurrent_positions_reached"
+                except Exception:
+                    pass
+                return 0.0
+        return equity
+
+    def _build_symbol_status(
+        self,
+        symbol: str,
+        engine: BFATEngine | None,
+        equity: float,
+    ) -> dict[str, Any]:
+        pos: Position | None = None
+        pos_dict: dict[str, Any] | None = None
+        engine_state = "stopped"
+        kill_triggered = False
+        if engine is not None:
+            sm = engine._state_machine
+            engine_state = sm.state.value
+            pos = sm.position
+            if pos is not None:
+                pos_dict = self._position_to_dict(pos)
+            kill_triggered = engine._kill_switch.is_triggered()
         if pos_dict is None:
-            live_pos = self._fetch_binance_position()
+            live_pos = self._fetch_binance_position(symbol)
             if live_pos is not None:
                 pos_dict = live_pos
+
+        trades = self._get_trade_repo().query(symbol=symbol, limit=1)
         last_signal = None
         r_multiple = None
         r_validation_status = None
-        trade_repo = self._engine._trade_repo
-        trades = trade_repo.query(symbol=self._settings.bfat_symbol, limit=1)
         if trades:
             t = trades[0]
             last_signal = {
@@ -341,20 +411,29 @@ class EngineService:
             r_val = t.get("pnl_r")
             r_multiple = float(r_val) if r_val is not None else None
             r_validation_status = t.get("r_validation_status") or None
-        kill = self._engine._kill_switch
-        system_health = "HEALTHY"
-        if self._critical_error:
-            system_health = "DEGRADED"
-        elif r_validation_status in ("CRITICAL", "CRITICAL_OUTLIER"):
-            system_health = "DEGRADED"
-        take_profit = (
-            pos.take_profit
-            if pos is not None
-            else getattr(self._engine, "_current_take_profit", None)
-        )
-        tp_algo_id = getattr(self._engine, "_current_tp_algo_id", None)
-        tp_status_raw = getattr(self._engine, "_tp_status", "none")
-        tp_last_error = getattr(self._engine, "_tp_last_error", None)
+
+        take_profit = None
+        tp_algo_id = None
+        tp_status_raw = "none"
+        tp_last_error = None
+        sl_order_id = None
+        sl_verified_flag = False
+        cooldown_remaining = 0
+        if engine is not None:
+            take_profit = (
+                pos.take_profit
+                if pos is not None
+                else getattr(engine, "_current_take_profit", None)
+            )
+            tp_algo_id = getattr(engine, "_current_tp_algo_id", None)
+            tp_status_raw = getattr(engine, "_tp_status", "none")
+            tp_last_error = getattr(engine, "_tp_last_error", None)
+            sl_order_id = getattr(engine, "_current_stop_order_id", None)
+            sl_verified_flag = getattr(engine, "_sl_verified", False)
+            cooldown_remaining = getattr(engine, "_post_close_cooldown_remaining", 0)
+        elif pos_dict is not None:
+            take_profit = pos_dict.get("take_profit")
+
         if take_profit is not None and float(take_profit) > 0:
             tp_protection_mode = "exchange" if tp_algo_id else "fallback"
         else:
@@ -364,8 +443,7 @@ class EngineService:
         elif tp_status_raw == "repriced" and tp_algo_id:
             tp_protection_mode = "repriced"
         tp_verified = tp_algo_id is not None if tp_protection_mode in ("exchange", "repriced") else None
-        sl_order_id = getattr(self._engine, "_current_stop_order_id", None)
-        sl_verified_flag = getattr(self._engine, "_sl_verified", False)
+
         if pos is not None and sl_order_id:
             sl_protection_mode = "exchange" if sl_verified_flag else "recovering"
         elif pos is not None:
@@ -373,11 +451,11 @@ class EngineService:
         else:
             sl_protection_mode = "none"
         sl_verified = sl_verified_flag if sl_protection_mode == "exchange" else None
+
         unrealized_pnl: float | None = None
-        if pos is not None:
+        if pos is not None and engine is not None:
             try:
-                exec_client = self._engine._execution
-                live_data = exec_client.get_position(self._settings.bfat_symbol)
+                live_data = engine._execution.get_position(symbol)
                 if live_data:
                     up = live_data.get("unRealizedProfit") or live_data.get("unrealizedProfit") or 0
                     unrealized_pnl = float(up) if up else 0.0
@@ -385,32 +463,26 @@ class EngineService:
                 pass
         elif pos_dict is not None:
             unrealized_pnl = pos_dict.get("unrealized_pnl")
+
         total_realized_pnl: float | None = None
         try:
-            summary = self.get_trade_summary(symbol=self._settings.bfat_symbol)
+            summary = self.get_trade_summary(symbol=symbol)
             total_realized_pnl = summary.get("total_net_pnl", 0.0)
         except Exception:
             pass
-        cooldown_remaining = getattr(self._engine, "_post_close_cooldown_remaining", 0)
 
-        if diagnostics.get("insight_stale"):
-            system_health = "DEGRADED"
-
-        market_diag = diagnostics.get("market_stream")
-        if market_diag and not market_diag.get("connected"):
-            system_health = "DEGRADED"
-
+        current_stop_price = (
+            pos.stop_price if pos
+            else (pos_dict.get("stop_price", 0) or None) if pos_dict and pos_dict.get("stop_price", 0) > 0
+            else None
+        )
         return {
-            "engine_state": sm.state.value,
-            "strategy_mode": self._strategy_mode,
+            "symbol": symbol,
+            "engine_state": engine_state,
             "position": pos_dict,
             "last_signal": last_signal,
-            "current_stop_price": (
-                pos.stop_price if pos
-                else (pos_dict.get("stop_price", 0) or None) if pos_dict and pos_dict.get("stop_price", 0) > 0
-                else None
-            ),
-            "take_profit": take_profit,
+            "current_stop_price": current_stop_price,
+            "take_profit": float(take_profit) if take_profit not in (None, "") else None,
             "tp_protection_mode": tp_protection_mode,
             "tp_verified": tp_verified,
             "tp_status": tp_status_raw,
@@ -419,17 +491,116 @@ class EngineService:
             "sl_verified": sl_verified,
             "r_multiple": r_multiple,
             "r_validation_status": r_validation_status,
+            "unrealized_pnl": unrealized_pnl,
+            "total_realized_pnl": total_realized_pnl,
+            "kill_switch_triggered": kill_triggered,
+            "post_close_cooldown": cooldown_remaining,
+        }
+
+    def _get_status(self) -> dict[str, Any]:
+        """Build status dict for API/WebSocket."""
+        equity = self._equity_provider()
+        diagnostics = self._build_stream_diagnostics()
+        symbol_statuses = [
+            self._build_symbol_status(symbol, self._engines.get(symbol), equity)
+            for symbol in self._symbols
+        ]
+        positions = [
+            s["position"] for s in symbol_statuses if s.get("position") is not None
+        ]
+        open_position_count = len([
+            s for s in symbol_statuses if s.get("position") is not None
+        ])
+        primary_status = (
+            next((s for s in symbol_statuses if s.get("position") is not None), None)
+            or symbol_statuses[0]
+        )
+        states = [str(s.get("engine_state", "stopped")) for s in symbol_statuses]
+        if not self._running:
+            engine_state = "stopped"
+        elif "entering" in states:
+            engine_state = "entering"
+        elif "open" in states:
+            engine_state = "open"
+        elif "closing" in states:
+            engine_state = "closing"
+        else:
+            engine_state = "flat"
+
+        last_trade = self._get_trade_repo().query(symbol=None, limit=1)
+        last_signal = primary_status.get("last_signal")
+        r_multiple = primary_status.get("r_multiple")
+        r_validation_status = primary_status.get("r_validation_status")
+        if last_trade:
+            t = last_trade[0]
+            last_signal = {
+                "symbol": t.get("symbol", ""),
+                "side": t.get("side", ""),
+                "signal_time": t.get("entry_time", ""),
+                "signal_candle_ts": t.get("signal_candle_ts", "") or "",
+            }
+            r_val = t.get("pnl_r")
+            r_multiple = float(r_val) if r_val is not None else None
+            r_validation_status = t.get("r_validation_status") or None
+
+        unrealized_values = [
+            float(v) for v in (s.get("unrealized_pnl") for s in symbol_statuses)
+            if v is not None
+        ]
+        unrealized_pnl = sum(unrealized_values) if unrealized_values else None
+        total_realized_pnl: float | None = None
+        try:
+            summary = self.get_trade_summary(symbol=None)
+            total_realized_pnl = summary.get("total_net_pnl", 0.0)
+        except Exception:
+            pass
+
+        system_health = "HEALTHY"
+        if self._critical_error:
+            system_health = "DEGRADED"
+        elif r_validation_status in ("CRITICAL", "CRITICAL_OUTLIER"):
+            system_health = "DEGRADED"
+        if diagnostics.get("insight_stale"):
+            system_health = "DEGRADED"
+        market_streams = diagnostics.get("market_streams") or {}
+        if self._running and any(
+            not diag.get("connected")
+            for diag in market_streams.values()
+            if isinstance(diag, dict)
+        ):
+            system_health = "DEGRADED"
+
+        return {
+            "engine_state": engine_state,
+            "strategy_mode": self._strategy_mode,
+            "symbols": list(self._symbols),
+            "max_concurrent_positions": self._max_concurrent_positions,
+            "open_position_count": open_position_count,
+            "positions": positions,
+            "symbol_statuses": symbol_statuses,
+            "position": primary_status.get("position"),
+            "last_signal": last_signal,
+            "current_stop_price": primary_status.get("current_stop_price"),
+            "take_profit": primary_status.get("take_profit"),
+            "tp_protection_mode": primary_status.get("tp_protection_mode"),
+            "tp_verified": primary_status.get("tp_verified"),
+            "tp_status": primary_status.get("tp_status"),
+            "tp_error": primary_status.get("tp_error"),
+            "sl_protection_mode": primary_status.get("sl_protection_mode"),
+            "sl_verified": primary_status.get("sl_verified"),
+            "r_multiple": r_multiple,
+            "r_validation_status": r_validation_status,
             "system_health": system_health,
             "equity": equity,
             "unrealized_pnl": unrealized_pnl,
             "total_realized_pnl": total_realized_pnl,
-            "kill_switch_triggered": kill.is_triggered(),
-            "post_close_cooldown": cooldown_remaining,
+            "kill_switch_triggered": any(bool(s.get("kill_switch_triggered")) for s in symbol_statuses),
+            "post_close_cooldown": max(int(s.get("post_close_cooldown") or 0) for s in symbol_statuses),
             "error": self._critical_error,
             "diagnostics": diagnostics,
         }
 
-    def _sync_binance_position(self) -> None:
+    def _sync_binance_position(self, symbol: str, engine: BFATEngine) -> None:
         """On engine start, check Binance for an existing open position and restore into StateMachine.
 
         FAIL-CLOSED POLICY: if SL cannot be verified on exchange after all
@@ -437,11 +608,11 @@ class EngineService:
         FLAT, and the unprotected position remains on Binance for manual
         intervention (logged as CRITICAL).
         """
-        if self._engine is None:
+        if engine is None:
             return
-        symbol = self._settings.bfat_symbol
-        exec_client = self._engine._execution
-        sm = self._engine._state_machine
+        symbol = symbol.upper()
+        exec_client = engine._execution
+        sm = engine._state_machine
 
         # ── Hedge-mode guard ──
         try:
@@ -645,10 +816,10 @@ class EngineService:
                 take_profit=take_profit_price,
             )
             sm.restore_position(position)
-            self._engine._current_stop_order_id = stop_order_id
-            self._engine._sl_verified = True
-            self._engine._current_tp_algo_id = tp_order_id
-            self._engine._current_take_profit = take_profit_price
+            engine._current_stop_order_id = stop_order_id
+            engine._sl_verified = True
+            engine._current_tp_algo_id = tp_order_id
+            engine._current_take_profit = take_profit_price
 
             if tp_order_id:
                 try:
@@ -657,7 +828,7 @@ class EngineService:
                             "TP order %s not confirmed as active on exchange for %s",
                             tp_order_id, symbol,
                         )
-                        self._engine._current_tp_algo_id = None
+                        engine._current_tp_algo_id = None
                 except Exception as e:
                     logger.debug("TP verification check failed: %s", e)
 
@@ -688,7 +859,7 @@ class EngineService:
                                 "timestamp": str(bar[6]),
                             })
                         if candles:
-                            se = self._engine._strategy_engine
+                            se = engine._strategy_engine
                             pre_regime = se.regime_classifier.evaluate(candles)
                             se._active_regime = pre_regime
                             rc_details = se.regime_classifier.get_last_details()
@@ -698,8 +869,8 @@ class EngineService:
                                 pre_regime, se._last_trend_direction,
                             )
 
-                            if take_profit_price is None and self._engine._current_tp_algo_id is None:
-                                self._recover_tp_from_atr(candles, position, exec_client)
+                            if take_profit_price is None and engine._current_tp_algo_id is None:
+                                self._recover_tp_from_atr(candles, position, exec_client, engine)
                 except Exception as e:
                     logger.warning("Regime pre-evaluation failed (non-fatal): %s", e)
 
@@ -710,7 +881,11 @@ class EngineService:
     _SL_ATR_MULTIPLIER = 1.6
 
     def _recover_tp_from_atr(
-        self, candles: list[dict], position: Position, exec_client: BinanceExecutionClient,
+        self,
+        candles: list[dict],
+        position: Position,
+        exec_client: BinanceExecutionClient,
+        engine: BFATEngine,
     ) -> None:
         """Calculate and place a missing TP order using ATR, with price-aware repricing."""
         if len(candles) < 15:
@@ -765,11 +940,11 @@ class EngineService:
             )
             algo_id = str(tp_resp.get("orderId", ""))
             if algo_id:
-                self._engine._current_tp_algo_id = algo_id
-                self._engine._current_take_profit = tp_price
-                self._engine._tp_status = "repriced" if repriced else "exchange"
-                self._engine._tp_last_error = None
-                sm = self._engine._state_machine
+                engine._current_tp_algo_id = algo_id
+                engine._current_take_profit = tp_price
+                engine._tp_status = "repriced" if repriced else "exchange"
+                engine._tp_last_error = None
+                sm = engine._state_machine
                 try:
                     sm.on_take_profit_update(tp_price)
                 except ValueError:
@@ -779,8 +954,8 @@ class EngineService:
                     algo_id, tp_price, self._TP_ATR_MULTIPLIER, repriced,
                 )
         except Exception as e:
-            self._engine._tp_status = "failed"
-            self._engine._tp_last_error = str(e)
+            engine._tp_status = "failed"
+            engine._tp_last_error = str(e)
             logger.warning("TP recovery during sync failed (non-fatal): %s", e)
 
     async def _run(self) -> None:
@@ -788,29 +963,42 @@ class EngineService:
         self._critical_error = None
         _, _, system_log_repo = create_persistence(self._db)
         try:
-            self._engine = self._build_engine()
-            self._sync_binance_position()
-            market = BinanceMarketStream(
-                symbol=self._settings.bfat_symbol,
-                engine=self._engine,
-                equity_provider=self._equity_provider,
-                testnet=self._settings.binance_testnet,
-            )
+            self._engines = {
+                symbol: self._build_engine(symbol)
+                for symbol in self._symbols
+            }
+            self._engine = self._engines.get(self._symbols[0])
+            for symbol, engine in self._engines.items():
+                self._sync_binance_position(symbol, engine)
+
+            self._market_streams = {
+                symbol: BinanceMarketStream(
+                    symbol=symbol,
+                    engine=engine,
+                    equity_provider=lambda symbol=symbol: self._equity_provider_for_symbol(symbol),
+                    testnet=self._settings.binance_testnet,
+                )
+                for symbol, engine in self._engines.items()
+            }
+            self._market_stream = self._market_streams.get(self._symbols[0])
             user = BinanceUserStream(
                 api_key=self._settings.binance_api_key,
                 api_secret=self._settings.binance_api_secret,
                 engine=self._engine,
                 equity_provider=self._equity_provider,
                 testnet=self._settings.binance_testnet,
+                engines=self._engines,
             )
-            self._market_stream = market
             self._user_stream = user
-            await market.start()
+            await asyncio.gather(*(stream.start() for stream in self._market_streams.values()))
             await user.start()
             system_log_repo.insert(
                 level="INFO",
                 event="engine_started",
-                message="Market and user streams connected. Engine running.",
+                message=(
+                    "Market and user streams connected. "
+                    f"Symbols={','.join(self._symbols)} max_concurrent={self._max_concurrent_positions}."
+                ),
             )
             while self._running:
                 await asyncio.sleep(1)
@@ -819,7 +1007,7 @@ class EngineService:
                 event="engine_stopped",
                 message="Engine stopped. Streams disconnected.",
             )
-            await market.stop()
+            await asyncio.gather(*(stream.stop() for stream in self._market_streams.values()), return_exceptions=True)
             await user.stop()
         except Exception as e:
             self._critical_error = str(e)
@@ -828,11 +1016,10 @@ class EngineService:
                 event="engine_start_failed",
                 message=f"Engine failed: {e}",
             )
-            if self._market_stream:
-                try:
-                    await self._market_stream.stop()
-                except Exception:
-                    pass
+            await asyncio.gather(
+                *(stream.stop() for stream in self._market_streams.values()),
+                return_exceptions=True,
+            )
             if self._user_stream:
                 try:
                     await self._user_stream.stop()
@@ -841,8 +1028,10 @@ class EngineService:
         finally:
             self._running = False
             self._market_stream = None
+            self._market_streams = {}
             self._user_stream = None
             self._engine = None
+            self._engines = {}
 
     async def start(self) -> None:
         """Start engine in background."""
@@ -886,6 +1075,8 @@ class EngineService:
             "running": self._running,
             "can_update": not self._running,
             "presets": StrategyConstants.STRATEGY_PRESETS,
+            "symbols": list(self._symbols),
+            "max_concurrent_positions": self._max_concurrent_positions,
         }
 
     def set_strategy_mode(self, mode: str) -> dict[str, Any]:
@@ -946,10 +1137,16 @@ class EngineService:
         except Exception:
             return 0, "–"
 
-    def get_trades(self, symbol: str, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+    def get_trades(
+        self,
+        symbol: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
         """Return closed trades with computed display fields from DB only."""
         sf = self._safe_float
-        rows = self._get_trade_repo().query(symbol=symbol, limit=limit, offset=offset)
+        query_symbol = None if symbol in (None, "", "ALL") else str(symbol).upper()
+        rows = self._get_trade_repo().query(symbol=query_symbol, limit=limit, offset=offset)
         result: list[dict[str, Any]] = []
         for r in rows:
             entry_price = sf(r.get("entry_price"))
@@ -990,10 +1187,11 @@ class EngineService:
             })
         return result
 
-    def get_trade_summary(self, symbol: str) -> dict[str, Any]:
+    def get_trade_summary(self, symbol: str | None = None) -> dict[str, Any]:
         """Compute summary performance metrics from all closed trades."""
         sf = self._safe_float
-        rows = self._get_trade_repo().query(symbol=symbol, limit=10000)
+        query_symbol = None if symbol in (None, "", "ALL") else str(symbol).upper()
+        rows = self._get_trade_repo().query(symbol=query_symbol, limit=10000)
         total = len(rows)
         empty_summary: dict[str, Any] = {
             "total_trades": 0,
@@ -1050,9 +1248,11 @@ class EngineService:
             "worst_trade_r": round(min(r_values), 4) if r_values else 0.0,
         }
 
-    def get_insight(self) -> dict[str, Any]:
+    def get_insight(self, symbol: str | None = None) -> dict[str, Any]:
         """Return last strategy evaluation + regime classifier data for insight API."""
+        selected_symbol = str(symbol or self._symbols[0]).upper()
         default: dict[str, Any] = {
+            "symbol": selected_symbol,
             "regime": "Unknown",
             "strategy_mode": self._strategy_mode,
             "active_strategy": "Unknown",
@@ -1064,9 +1264,12 @@ class EngineService:
             "ema_slow": 0.0,
             "engine_reasoning": ["No evaluation yet. Start the engine to receive insights."],
         }
-        if self._engine is None:
+        engine = self._engines.get(selected_symbol) or (
+            self._engine if selected_symbol == self._symbols[0] else None
+        )
+        if engine is None:
             return default
-        se = getattr(self._engine, "_strategy_engine", None)
+        se = getattr(engine, "_strategy_engine", None)
         if se is None:
             return default
         details = getattr(se, "get_last_evaluation_details", lambda: {})()
@@ -1074,6 +1277,7 @@ class EngineService:
             return default
 
         result: dict[str, Any] = {
+            "symbol": selected_symbol,
             "regime": details.get("regime", "Unknown"),
             "strategy_mode": details.get("strategy_mode", self._strategy_mode),
             "active_strategy": details.get("active_strategy", "Unknown"),
@@ -1101,11 +1305,11 @@ class EngineService:
         if "entry_conditions" in details:
             result["entry_conditions"] = details["entry_conditions"]
         skip_reason = details.get("skip_reason")
-        if skip_reason is None and self._engine is not None:
-            skip_reason = getattr(self._engine, "_last_skip_reason", None)
+        if skip_reason is None:
+            skip_reason = getattr(engine, "_last_skip_reason", None)
         result["skip_reason"] = skip_reason
         result["last_insight_update_ts"] = details.get("last_insight_update_ts", 0)
-        entry_snapshot = getattr(self._engine, "_entry_insight_snapshot", None)
+        entry_snapshot = getattr(engine, "_entry_insight_snapshot", None)
         if entry_snapshot:
             result["entry_insight"] = entry_snapshot
         return result
